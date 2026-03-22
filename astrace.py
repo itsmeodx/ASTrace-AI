@@ -26,7 +26,7 @@ from typing import Iterator, Protocol
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
@@ -614,8 +614,6 @@ def _build_finding_renderable(finding: Finding):  # noqa: ANN201
         A ``rich.console.Group`` containing the badge, trace table, and
         recommendation text, ready to pass to ``Panel``.
     """
-    # Deferred import — avoids a circular reference with the top-level Console init.
-    from rich.console import Group  # type: ignore[import-not-found]
 
     trace_table = Table(
         box=box.SIMPLE_HEAVY,
@@ -668,7 +666,7 @@ def render_report(report: AuditReport) -> None:
     # Aggregate all findings by severity for a quick top-level overview.
     sev_counts: dict[str, int] = {}
     for f in report.findings:
-        label = _SEVERITY_STYLES[f.severity][1]    # e.g. "🟠 HIGH"
+        label = _SEVERITY_STYLES[f.severity][1]  # e.g. "🟠 HIGH"
         sev_counts[label] = sev_counts.get(label, 0) + 1
 
     # A compact two-column table: severity icon | count.
@@ -678,11 +676,15 @@ def render_report(report: AuditReport) -> None:
     for label, count in sev_counts.items():
         summary_table.add_row(label, str(count))
 
-    # Truncate the overall summary to keep the subtitle to one neat line.
-    console.print(Panel(
+    # The panel body now contains both the summary table and the LLM's text description.
+    summary_group = Group(
         summary_table,
+        Text("\n" + report.overall_summary, style="cyan")
+    )
+
+    console.print(Panel(
+        summary_group,
         title="[bold]Finding Summary[/]",
-        subtitle=str(report.overall_summary)[:120],  # type: ignore[index]
         border_style="cyan",
     ))
 
