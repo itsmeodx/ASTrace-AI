@@ -15,9 +15,12 @@ Pipeline:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import subprocess
 import sys
+from argparse import ArgumentParser
 from enum import Enum
 from pathlib import Path
 from typing import Iterator, Protocol
@@ -68,22 +71,44 @@ _LIBCLANG_SEARCH_PATHS: list[str] = [
 
 def find_libclang() -> str | None:
     """
-    Locate the libclang shared library on the host system.
+    Locate the libclang shared library on the host system using a cascading search.
 
-    Checks the ``CLANG_LIBRARY_PATH`` environment variable first so users
-    can always override auto-detection on non-standard setups. Falls back
-    to probing the well-known paths in ``_LIBCLANG_SEARCH_PATHS``.
+    1. Checks the `CLANG_LIBRARY_PATH` environment variable.
+    2. Attempts to query `llvm-config --libdir`.
+    3. Attempts to query `clang -print-file-name=libclang.so`.
+    4. Probes well-known paths in `_LIBCLANG_SEARCH_PATHS`.
 
     Returns:
-        Absolute path to the library file, or ``None`` if it cannot be found.
+        Absolute path to the library file, or None if it cannot be found.
     """
+    # 1. Override via Env Var
     env_path = os.environ.get("CLANG_LIBRARY_PATH")
     if env_path and Path(env_path).exists():
-        return env_path
+        return str(Path(env_path).absolute())
 
+    # 2. Query llvm-config
+    try:
+        libdir = subprocess.check_output(["llvm-config", "--libdir"], stderr=subprocess.DEVNULL).decode().strip()
+        if libdir:
+            for ext in (".so", ".so.1", ".dylib", ".dll"):
+                candidate = Path(libdir) / f"libclang{ext}"
+                if candidate.exists():
+                    return str(candidate.absolute())
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+    # 3. Query clang binary
+    try:
+        lib_file = subprocess.check_output(["clang", "-print-file-name=libclang.so"], stderr=subprocess.DEVNULL).decode().strip()
+        if lib_file and os.path.isabs(lib_file) and Path(lib_file).exists():
+            return lib_file
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+    # 4. Fallback to hardcoded search paths
     for candidate in _LIBCLANG_SEARCH_PATHS:
         if Path(candidate).exists():
-            return candidate
+            return str(Path(candidate).absolute())
 
     return None
 
@@ -715,24 +740,87 @@ def render_report(report: AuditReport) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def run_doctor() -> bool:
+    """
+    Verify the application environment and print a status report.
+    Returns True if all critical dependencies are met.
+    """
+    all_ok = True
+
+    # 1. libclang
+    with console.status("[dim]Checking libclang...[/]"):
+        lib_path = find_libclang()
+    if lib_path:
+        console.print(f"  [green]✔[/] [bold]libclang:[/] Found at [italic]{lib_path}[/]")
+    else:
+        console.print("  [red]✘[/] [bold red]libclang:[/] Not found.")
+        console.print("      [dim]Action: Install `libllvm` or `clang` package, or set `CLANG_LIBRARY_PATH`. [/]")
+        all_ok = False
+
+    # 2. LLM Providers
+    provider = os.environ.get("LLM_PROVIDER", "openai").lower().strip()
+    key_name = "OPENAI_API_KEY" if provider == "openai" else "GEMINI_API_KEY"
+    api_key = os.environ.get(key_name)
+
+    if api_key:
+        console.print(f"  [green]✔[/] [bold]LLM Provider:[/] {provider} (Key detected: {key_name})")
+    else:
+        console.print(f"  [yellow]⚠[/] [bold yellow]LLM Provider:[/] {provider} (Key missing: {key_name})")
+        console.print(f"      [dim]Action: Set `{key_name}` in your .env file.[/]")
+        all_ok = False
+
+    # 3. Python Packages
+    deps = {
+        "clang": "clang",
+        "openai": "openai",
+        "google-genai": "google.genai",
+        "pydantic": "pydantic",
+        "rich": "rich",
+        "python-dotenv": "dotenv",
+    }
+    missing = []
+    for label, import_name in deps.items():
+        try:
+            importlib.import_module(import_name)
+        except ImportError:
+            missing.append(label)
+
+    if not missing:
+        console.print(f"  [green]✔[/] [bold]Python Deps:[/] All {len(deps)} core packages installed.")
+    else:
+        console.print(f"  [red]✘[/] [bold red]Python Deps:[/] Missing: {', '.join(missing)}")
+        console.print("      [dim]Action: Run `pip install -r requirements.txt`[/]")
+        all_ok = False
+
+    console.print()
+    if all_ok:
+        console.print("[bold green]OVERALL STATUS: Ready to audit.[/]")
+    else:
+        console.print("[bold red]OVERALL STATUS: Environment incomplete.[/]")
+
+    return all_ok
+
+
 def main() -> None:
     """
-    Entry point for the three-stage audit pipeline.
-
-    Expects a single positional argument (the path to a C/C++ source file)
-    and orchestrates the full flow: AST parsing → LLM analysis → terminal render.
-
-    Raises:
-        SystemExit: If no argument is provided, the file does not exist, or
-                    any downstream step fails (libclang, API call, etc.).
+    Enhanced entry point for the ASTrace AI security auditor.
     """
-    if len(sys.argv) < 2:
-        console.print("[bold red]Usage:[/]  astrace.py <path/to/file.c>")
+    parser = ArgumentParser(description="ASTrace AI — AST-Aware C/C++ Security Auditor")
+    parser.add_argument("file", nargs="?", help="Path to the C/C++ source file to audit")
+    parser.add_argument("--check", action="store_true", help="Run environment diagnostic check")
+    parser.add_argument("--version", action="version", version="ASTrace AI v0.1.0-poc")
+    args = parser.parse_args()
+
+    # Feature: Environment Check
+    if args.check:
+        sys.exit(0 if run_doctor() else 1)
+
+    # Validate Positional Argument
+    if not args.file:
+        parser.print_help()
         sys.exit(1)
 
-    # The only accepted argument is the path to the C/C++ source file.
-    source_path = sys.argv[1]
-
+    source_path = args.file
     if not Path(source_path).is_file():
         console.print(f"[bold red]ERROR:[/] File not found: [italic]{source_path}[/]")
         sys.exit(1)
@@ -742,7 +830,6 @@ def main() -> None:
         fn_slices = slice_risky_functions(source_path)
 
     # If the slicer finds nothing, the file has no memory-management code to audit.
-    # No need to spend LLM tokens on it.
     if not fn_slices:
         console.print(Panel(
             "[bold green]✔  No high-risk code patterns found.[/]\n"
@@ -753,7 +840,6 @@ def main() -> None:
         ))
         return
 
-    # Print a short manifest of what was discovered before sending to the LLM.
     console.print(f"[cyan]AST slicer found [bold]{len(fn_slices)}[/] function(s) containing high-risk operations.[/]")
     for fn in fn_slices:
         console.print(

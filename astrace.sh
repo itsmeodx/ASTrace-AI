@@ -44,8 +44,10 @@ spin() {
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
-  printf "Usage:  %s [--local] <path/to/file.c>\n" "$(basename "$0")" >&2
+  printf "Usage:  %s [--local] [options] <path/to/file.c>\n" "$(basename "$0")" >&2
   printf "  --local : Run directly on the host using .venv (bypasses Docker)\n" >&2
+  printf "  --check : Run environment diagnostic check\n" >&2
+  printf "  --version : Show version information\n" >&2
   exit 1
 }
 
@@ -53,33 +55,46 @@ usage() {
 [[ $# -ge 1 ]] || usage
 
 RUN_LOCAL=0
-if [[ "${1:-}" == "--local" ]]; then
+# Detect if we should run locally (either --local is passed, or we are running a check/version)
+if [[ $* == *"--local"* ]] || [[ $* == *"--check"* ]] || [[ $* == *"--version"* ]]; then
   RUN_LOCAL=1
+fi
+
+# Strip --local from args so it doesn't confuse the python script (if it survives)
+# But actually, we can just pass them all through since astrace.sh handles its own.
+# To be clean, we'll only shift --local if it was the FIRST argument to maintain backward compatibility.
+if [[ "${1:-}" == "--local" ]]; then
   shift
-  # Check again if file argument exists after shifting
-  [[ $# -ge 1 ]] || usage
 fi
 
 # POSIX standard end-of-options marker
 if [[ "${1:-}" == "--" ]]; then
   shift
-  [[ $# -ge 1 ]] || usage
-elif [[ "${1:-}" == -* ]]; then
-  log_error "Unknown flag: $1"
-  usage
 fi
 
-TARGET_INPUT="$1"
+# ── Pre-flight: resolve absolute path (only if a file is provided) ──
+ABSOLUTE_PATH=""
+SOURCE_DIR=""
+SOURCE_FILE=""
 
-# ── Pre-flight: resolve absolute path ─────────────────────────────────────────
-if ! ABSOLUTE_PATH="$(realpath -- "$TARGET_INPUT" 2>/dev/null)"; then
-  log_error "Cannot resolve path: ${TARGET_INPUT}"
-  exit 1
-fi
+# If there's an argument left and it's not a known flag, treat it as a file.
+# We also SKIP this if --check or --version is present anywhere in the args.
+if [[ $* == *"--check"* ]] || [[ $* == *"--version"* ]]; then
+  : # Skip file check
+elif [[ $# -gt 0 ]] && [[ "$1" != --* ]]; then
+  TARGET_INPUT="$1"
+  if ! ABSOLUTE_PATH="$(realpath -- "$TARGET_INPUT" 2>/dev/null)"; then
+    log_error "Cannot resolve path: ${TARGET_INPUT}"
+    exit 1
+  fi
 
-if [[ ! -f "$ABSOLUTE_PATH" ]]; then
-  log_error "File not found: ${ABSOLUTE_PATH}"
-  exit 1
+  if [[ ! -f "$ABSOLUTE_PATH" ]]; then
+    log_error "File not found: ${ABSOLUTE_PATH}"
+    exit 1
+  fi
+
+  SOURCE_DIR="$(dirname "$ABSOLUTE_PATH")"
+  SOURCE_FILE="$(basename "$ABSOLUTE_PATH")"
 fi
 
 # Reject directories
@@ -88,8 +103,6 @@ if [[ -d "$ABSOLUTE_PATH" ]]; then
   exit 1
 fi
 
-SOURCE_DIR="$(dirname "$ABSOLUTE_PATH")"
-SOURCE_FILE="$(basename "$ABSOLUTE_PATH")"
 
 # ── Pre-flight: Docker availability ──────────────────────────────────────────
 if [[ $RUN_LOCAL -eq 0 ]]; then
@@ -135,7 +148,9 @@ case "${_ACTIVE_PROVIDER}" in
 esac
 
 if [[ $RUN_LOCAL -eq 1 ]]; then
-  log_info "Auditing locally: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
+  if [[ -n "$SOURCE_FILE" ]]; then
+    log_info "Auditing locally: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
+  fi
 
   if [[ ! -f "${SCRIPT_DIR}/.venv/bin/python" ]]; then
     log_info "No local .venv found. Creating one and installing dependencies..."
@@ -148,8 +163,8 @@ if [[ $RUN_LOCAL -eq 1 ]]; then
     log_info "Virtual environment successfully provisioned."
   fi
 
-  # Exec directly using the venv's Python binary
-  exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "$ABSOLUTE_PATH"
+  # Exec directly using the venv's Python binary, passing through remaining args
+  exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "$@"
 
 else
   # ── Build Docker image ────────────────────────────────────────────────────────
@@ -172,15 +187,35 @@ else
   printf " ${CLR_CYAN}DONE${CLR_RESET}\n"
 
   # ── Run audit ─────────────────────────────────────────────────────────────────
-  log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
-  printf "\n"
+  if [[ -n "$SOURCE_FILE" ]]; then
+    log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
+    printf "\n"
+  fi
 
-  # Exec to preserve signals and exit codes.
-  # COMPOSE_PROGRESS=quiet suppresses lifecycle logs.
-  exec env COMPOSE_PROGRESS=quiet docker compose \
-    --project-directory "$SCRIPT_DIR" \
-    run --rm \
-    --volume "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro" \
-    audit \
-    python astrace.py "${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
+  # If we have a file, we must translate the host path to the container path
+  if [[ -n "$SOURCE_FILE" ]]; then
+    # Replace the local file path with the container mount point
+    # We find the file argument and replace it.
+    args=()
+    for arg in "$@"; do
+      if [[ "$arg" == "$ABSOLUTE_PATH" || "$arg" == "$TARGET_INPUT" ]]; then
+        args+=("${CONTAINER_SRC_DIR}/${SOURCE_FILE}")
+      else
+        args+=("$arg")
+      fi
+    done
+    exec env COMPOSE_PROGRESS=quiet docker compose \
+      --project-directory "$SCRIPT_DIR" \
+      run --rm \
+      --volume "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro" \
+      audit \
+      python astrace.py "${args[@]}"
+  else
+    # No file, just run flags
+    exec env COMPOSE_PROGRESS=quiet docker compose \
+      --project-directory "$SCRIPT_DIR" \
+      run --rm \
+      audit \
+      python astrace.py "$@"
+  fi
 fi
