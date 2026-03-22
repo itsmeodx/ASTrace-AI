@@ -1,0 +1,24 @@
+# ─── LogicAudit – Docker Compose ─────────────────────────────────────────────
+# `version` is intentionally omitted – it is deprecated in Compose Specification.
+# Volumes and the run command are NOT defined here; they are injected at
+# runtime by audit.sh so any host file can be mounted dynamically.
+
+services:
+  audit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Enable BuildKit cache mounts (defined in Dockerfile with --mount=type=cache)
+      args:
+        BUILDKIT_INLINE_CACHE: "1"
+    # .env is injected at runtime – secrets never touch the image.
+    env_file:
+      - path: .env
+        required: true
+    # stdin_open + tty let Rich detect a real TTY and render 24-bit colour.
+    stdin_open: true
+    tty: true
+    # Read-only root filesystem hardens the container; /tmp stays writable.
+    read_only: true
+    tmpfs:
+      - /tmp
