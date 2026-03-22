@@ -31,18 +31,50 @@ else
 fi
 
 # ── Logging helpers ───────────────────────────────────────────────────────────
-log_info()  { printf "${CLR_CYAN}${CLR_BOLD}[logicaudit]${CLR_RESET}  %s\n" "$*"; }
-log_warn()  { printf "${CLR_YELLOW}${CLR_BOLD}[warn]${CLR_RESET}  %s\n" "$*" >&2; }
-log_error() { printf "${CLR_RED}${CLR_BOLD}[error]${CLR_RESET}  %s\n" "$*" >&2; }
+log_info()  { printf "${CLR_CYAN}${CLR_BOLD}[logicaudit]${CLR_RESET}  %b\n" "$*"; }
+log_warn()  { printf "${CLR_YELLOW}${CLR_BOLD}[warn]${CLR_RESET}  %b\n" "$*" >&2; }
+log_error() { printf "${CLR_RED}${CLR_BOLD}[error]${CLR_RESET}  %b\n" "$*" >&2; }
+
+spin() {
+  local pid=$1
+  local delay=0.15
+  local spinstr='|/-\'
+  while kill -0 "$pid" 2>/dev/null; do
+    local temp="${spinstr#?}"
+    printf " [%c] " "$spinstr"
+    local spinstr="${temp}${spinstr%"$temp"}"
+    sleep $delay
+    printf "\b\b\b\b\b"
+  done
+  printf "     \b\b\b\b\b"
+}
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
-  printf "Usage:  %s <path/to/file.c>\n" "$(basename "$0")" >&2
+  printf "Usage:  %s [--local] <path/to/file.c>\n" "$(basename "$0")" >&2
+  printf "  --local : Run directly on the host using .venv (bypasses Docker)\n" >&2
   exit 1
 }
 
 # ── Pre-flight: argument count ────────────────────────────────────────────────
 [[ $# -ge 1 ]] || usage
+
+RUN_LOCAL=0
+if [[ "${1:-}" == "--local" ]]; then
+  RUN_LOCAL=1
+  shift
+  # Check again if file argument exists after shifting
+  [[ $# -ge 1 ]] || usage
+fi
+
+# POSIX standard end-of-options marker
+if [[ "${1:-}" == "--" ]]; then
+  shift
+  [[ $# -ge 1 ]] || usage
+elif [[ "${1:-}" == -* ]]; then
+  log_error "Unknown flag: $1"
+  usage
+fi
 
 TARGET_INPUT="$1"
 
@@ -67,15 +99,17 @@ SOURCE_DIR="$(dirname "$ABSOLUTE_PATH")"
 SOURCE_FILE="$(basename "$ABSOLUTE_PATH")"
 
 # ── Pre-flight: Docker availability ──────────────────────────────────────────
-if ! command -v docker &>/dev/null; then
-  log_error "Docker is not installed or not in PATH."
-  exit 1
-fi
+if [[ $RUN_LOCAL -eq 0 ]]; then
+  if ! command -v docker &>/dev/null; then
+    log_error "Docker is not installed or not in PATH."
+    exit 1
+  fi
 
-if ! docker compose version &>/dev/null; then
-  log_error "Docker Compose v2 ('docker compose') is required but not available."
-  log_warn  "Install it from: https://docs.docker.com/compose/install/"
-  exit 1
+  if ! docker compose version &>/dev/null; then
+    log_error "Docker Compose v2 ('docker compose') is required but not available."
+    log_warn  "Install it from: https://docs.docker.com/compose/install/"
+    exit 1
+  fi
 fi
 
 # ── Pre-flight: .env file ─────────────────────────────────────────────────────
@@ -108,22 +142,54 @@ case "${_ACTIVE_PROVIDER}" in
     ;;
 esac
 
-# ── Build Docker image ────────────────────────────────────────────────────────
-log_info "Ensuring Docker image is up-to-date…"
-DOCKER_BUILDKIT=1 docker compose \
-  --project-directory "$SCRIPT_DIR" \
-  build audit
+if [[ $RUN_LOCAL -eq 1 ]]; then
+  log_info "Auditing locally: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
 
-# ── Run audit ─────────────────────────────────────────────────────────────────
-log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
-log_info "Mounting: ${SOURCE_DIR} → ${CONTAINER_SRC_DIR} (read-only)"
-printf "\n"
+  if [[ ! -f "${SCRIPT_DIR}/.venv/bin/python" ]]; then
+    log_info "No local .venv found. Creating one and installing dependencies..."
+    if ! command -v python3 &>/dev/null; then
+      log_error "python3 is not installed or not in PATH."
+      exit 1
+    fi
+    python3 -m venv "${SCRIPT_DIR}/.venv"
+    "${SCRIPT_DIR}/.venv/bin/pip" install --quiet -r "${SCRIPT_DIR}/requirements.txt"
+    log_info "Virtual environment successfully provisioned."
+  fi
 
-# `exec` replaces the shell process with docker, propagating signals correctly
-# and returning docker's exit code directly to the caller.
-exec docker compose \
-  --project-directory "$SCRIPT_DIR" \
-  run --rm \
-  --volume "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro" \
-  audit \
-  python logicaudit.py "${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
+  # Exec directly using the venv's Python binary
+  exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/logicaudit.py" "$ABSOLUTE_PATH"
+
+else
+  # ── Build Docker image ────────────────────────────────────────────────────────
+  printf "${CLR_CYAN}${CLR_BOLD}[logicaudit]${CLR_RESET}  Ensuring Docker image is up-to-date..."
+
+  # Run build quietly in the background, redirecting logs
+  DOCKER_BUILDKIT=1 docker compose \
+    --project-directory "$SCRIPT_DIR" \
+    build --quiet audit > "${SCRIPT_DIR}/.docker-build.log" 2>&1 &
+
+  BUILD_PID=$!
+  spin $BUILD_PID
+
+  if ! wait $BUILD_PID; then
+    printf " ${CLR_RED}FAILED${CLR_RESET}\n"
+    log_error "Docker build failed. See log for details:"
+    cat "${SCRIPT_DIR}/.docker-build.log" >&2
+    exit 1
+  fi
+  printf " ${CLR_CYAN}DONE${CLR_RESET}\n"
+
+  # ── Run audit ─────────────────────────────────────────────────────────────────
+  log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
+  printf "\n"
+
+  # `exec` replaces the shell process with docker, propagating signals correctly
+  # and returning docker's exit code directly to the caller.
+  # COMPOSE_PROGRESS=quiet suppresses the "Container Creating/Created" logs.
+  exec env COMPOSE_PROGRESS=quiet docker compose \
+    --project-directory "$SCRIPT_DIR" \
+    run --rm \
+    --volume "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro" \
+    audit \
+    python logicaudit.py "${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
+fi

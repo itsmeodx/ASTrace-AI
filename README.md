@@ -56,10 +56,17 @@ cp .env.example .env
 
 ### 2. Audit a file
 
+By default, the script builds and runs via Docker:
 ```bash
 chmod +x audit.sh
 ./audit.sh path/to/your/file.c
 ```
+
+If you prefer to run natively on your host machine without Docker:
+```bash
+./audit.sh --local path/to/your/file.c
+```
+*(Passing `--local` for the first time will automatically create a `.venv` and install all required dependencies for you!)*
 
 The script will:
 
@@ -117,21 +124,15 @@ GEMINI_API_KEY=AIza...
 
 ## Local Development (without Docker)
 
-If you have `clang` and `libclang` installed natively:
+You can run the engine directly using the `.venv` or by passing the `--local` flag to the runner script.
 
-```bash
-# 1. Create and activate a virtual environment
-python -m venv .venv && source .venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Set your API key
-cp .env.example .env && vim .env
-
-# 4. Run directly
-python logicaudit.py path/to/file.c
-```
+1. Ensure you have `clang` and `libclang` installed natively on your OS.
+2. Set your API key in `.env` (copied from `.env.example`).
+3. Run the audit:
+   ```bash
+   ./audit.sh --local path/to/file.c
+   ```
+   *The script will seamlessly generate its own `.venv` and install dependencies on its very first run!*
 
 > **Tip:** If `libclang` is not found automatically, set `CLANG_LIBRARY_PATH` in your `.env` to the path of your `libclang.so` / `libclang.dylib`.
 
