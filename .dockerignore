@@ -1,0 +1,32 @@
+# ── Secrets – NEVER include in the build context ──────────────────────────────
+.env
+*.env
+
+# ── Git & IDE metadata ─────────────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+
+# ── Python cache & virtual environments ───────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ── Test artefacts ─────────────────────────────────────────────────────────────
+tests/
+*.c          # target files are mounted at runtime, not baked into the image
+
+# ── Documentation – not needed inside the container ───────────────────────────
+README.md
+*.md
+
+# ── Runner script – runs on the host, not inside the container ─────────────────
+audit.sh

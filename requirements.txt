@@ -1,0 +1,22 @@
+# ─── LogicAudit – Direct dependencies (pinned) ────────────────────────────────
+# Pin exact versions for reproducible builds.
+# To upgrade: edit versions here, then rebuild with `docker compose build`.
+
+# libclang Python bindings – must match the system LLVM version in the Dockerfile
+clang==14.0
+
+# OpenAI Python SDK (structured outputs via `.parse()` added in >=1.30)
+openai==1.30.1
+
+# Google Gemini Python SDK – new unified SDK (replaces deprecated google-generativeai)
+# google-generativeai reached EOL Nov 2025; google-genai supports Gemini 2.0+
+google-genai==1.5.0
+
+# Pydantic v2 – used for LLM response schema enforcement
+pydantic==2.7.1
+
+# Rich – terminal UI rendering
+rich==13.7.1
+
+# python-dotenv – loads .env into os.environ at runtime
+python-dotenv==1.0.1
