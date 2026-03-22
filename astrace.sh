@@ -123,99 +123,42 @@ if [[ ! -f "${SCRIPT_DIR}/.env" ]]; then
   if [[ -f "${SCRIPT_DIR}/.env.example" ]]; then
     log_warn ".env not found – copying from .env.example"
     cp -- "${SCRIPT_DIR}/.env.example" "${SCRIPT_DIR}/.env"
-    log_error "Please edit ${SCRIPT_DIR}/.env and set your API key, then re-run."
-    exit 1
+    log_warn "Please edit ${SCRIPT_DIR}/.env and set your API key, then re-run."
   else
-    log_error "No .env found in ${SCRIPT_DIR}. Create one from .env.example."
-    exit 1
+    log_error "No .env found. Create one from .env.example."
   fi
+  exit 1
 fi
 
-# Check active provider's key
-_ACTIVE_PROVIDER="$(grep -E '^LLM_PROVIDER=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' "' || echo openai)"
-case "${_ACTIVE_PROVIDER}" in
-  openai)
-    if grep -q 'OPENAI_API_KEY=sk-\.\.\.' "${SCRIPT_DIR}/.env" 2>/dev/null; then
-      log_warn "OPENAI_API_KEY still contains the placeholder value. Did you forget to set it?"
-    fi
-    ;;
-  gemini)
-    if grep -q 'GEMINI_API_KEY=AIza\.\.\.' "${SCRIPT_DIR}/.env" 2>/dev/null || \
-       ! grep -qE '^GEMINI_API_KEY=.{10}' "${SCRIPT_DIR}/.env" 2>/dev/null; then
-      log_warn "GEMINI_API_KEY may not be set. Check ${SCRIPT_DIR}/.env."
-    fi
-    ;;
-esac
-
 if [[ $RUN_LOCAL -eq 1 ]]; then
-  if [[ -n "$SOURCE_FILE" ]]; then
-    log_info "Auditing locally: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
-  fi
+  [[ -n "$SOURCE_FILE" ]] && log_info "Auditing locally: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
 
   if [[ ! -f "${SCRIPT_DIR}/.venv/bin/python" ]]; then
-    log_info "No local .venv found. Creating one and installing dependencies..."
-    if ! command -v python3 &>/dev/null; then
-      log_error "python3 is not installed or not in PATH."
-      exit 1
-    fi
+    log_info "Creating .venv..."
     python3 -m venv "${SCRIPT_DIR}/.venv"
     "${SCRIPT_DIR}/.venv/bin/pip" install --quiet -r "${SCRIPT_DIR}/requirements.txt"
-    log_info "Virtual environment successfully provisioned."
   fi
-
-  # Exec directly using the venv's Python binary, passing through remaining args
   exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "$@"
-
 else
-  # ── Build Docker image ────────────────────────────────────────────────────────
-  printf "${CLR_CYAN}${CLR_BOLD}[astrace-ai]${CLR_RESET}  Ensuring Docker image is up-to-date..."
-
-  # Run build quietly in the background, redirecting logs
-  DOCKER_BUILDKIT=1 docker compose \
-    --project-directory "$SCRIPT_DIR" \
-    build --quiet audit > "${SCRIPT_DIR}/.docker-build.log" 2>&1 &
-
-  BUILD_PID=$!
-  spin $BUILD_PID
-
-  if ! wait $BUILD_PID; then
-    printf " ${CLR_RED}FAILED${CLR_RESET}\n"
-    log_error "Docker build failed. See log for details:"
-    cat "${SCRIPT_DIR}/.docker-build.log" >&2
-    exit 1
-  fi
+  # ── Docker Execution ──────────────────────────────────────────────────────────
+  printf "${CLR_CYAN}${CLR_BOLD}[astrace-ai]${CLR_RESET}  Updating Docker image..."
+  DOCKER_BUILDKIT=1 docker compose -f "${SCRIPT_DIR}/docker-compose.yaml" build --quiet audit > /dev/null 2>&1 &
+  spin $!
+  wait $! || { printf " ${CLR_RED}FAILED${CLR_RESET}\n"; exit 1; }
   printf " ${CLR_CYAN}DONE${CLR_RESET}\n"
 
-  # ── Run audit ─────────────────────────────────────────────────────────────────
-  if [[ -n "$SOURCE_FILE" ]]; then
-    log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
-    printf "\n"
-  fi
+  [[ -n "$SOURCE_FILE" ]] && log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}\n"
 
-  # If we have a file, we must translate the host path to the container path
-  if [[ -n "$SOURCE_FILE" ]]; then
-    # Replace the local file path with the container mount point
-    # We find the file argument and replace it.
-    args=()
-    for arg in "$@"; do
-      if [[ "$arg" == "$ABSOLUTE_PATH" || "$arg" == "$TARGET_INPUT" ]]; then
-        args+=("${CONTAINER_SRC_DIR}/${SOURCE_FILE}")
-      else
-        args+=("$arg")
-      fi
-    done
-    exec env COMPOSE_PROGRESS=quiet docker compose \
-      --project-directory "$SCRIPT_DIR" \
-      run --rm \
-      --volume "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro" \
-      audit \
-      python astrace.py "${args[@]}"
-  else
-    # No file, just run flags
-    exec env COMPOSE_PROGRESS=quiet docker compose \
-      --project-directory "$SCRIPT_DIR" \
-      run --rm \
-      audit \
-      python astrace.py "$@"
-  fi
+  # Translate host path to container path if needed
+  args=()
+  for arg in "$@"; do
+    [[ "$arg" == "$ABSOLUTE_PATH" || "$arg" == "$TARGET_INPUT" ]] && arg="${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
+    args+=("$arg")
+  done
+
+  VOL_ARG=()
+  [[ -n "$SOURCE_DIR" ]] && VOL_ARG=("--volume" "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro")
+
+  exec env COMPOSE_PROGRESS=quiet docker compose -f "${SCRIPT_DIR}/docker-compose.yaml" \
+    run --rm "${VOL_ARG[@]}" audit python astrace.py "${args[@]}"
 fi

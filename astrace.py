@@ -23,7 +23,7 @@ import sys
 from argparse import ArgumentParser
 from enum import Enum
 from pathlib import Path
-from typing import Iterator, Protocol
+from typing import Any, Iterator, Protocol
 
 # Third-party deps – type: ignore comments silence IDEs that aren't venv-aware.
 from dotenv import load_dotenv
@@ -70,47 +70,52 @@ _LIBCLANG_SEARCH_PATHS: list[str] = [
 
 
 def find_libclang() -> str | None:
-    """
-    Locate the libclang shared library on the host system using a cascading search.
-
-    1. Checks the `CLANG_LIBRARY_PATH` environment variable.
-    2. Attempts to query `llvm-config --libdir`.
-    3. Attempts to query `clang -print-file-name=libclang.so`.
-    4. Probes well-known paths in `_LIBCLANG_SEARCH_PATHS`.
-
-    Returns:
-        Absolute path to the library file, or None if it cannot be found.
-    """
-    # 1. Override via Env Var
+    """Locate the libclang shared library on the host system using a cascading search."""
+    # 1. Env Var Check
     env_path = os.environ.get("CLANG_LIBRARY_PATH")
     if env_path and Path(env_path).exists():
         return str(Path(env_path).absolute())
 
-    # 2. Query llvm-config
-    try:
-        libdir = subprocess.check_output(["llvm-config", "--libdir"], stderr=subprocess.DEVNULL).decode().strip()
-        if libdir:
-            for ext in (".so", ".so.1", ".dylib", ".dll"):
-                candidate = Path(libdir) / f"libclang{ext}"
-                if candidate.exists():
-                    return str(candidate.absolute())
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+    def _query(cmd: list[str], flag: str = "") -> str | None:
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+            return out if out and (not flag or flag in out) else None
+        except (subprocess.SubprocessError, FileNotFoundError):
+            return None
 
-    # 3. Query clang binary
-    try:
-        lib_file = subprocess.check_output(["clang", "-print-file-name=libclang.so"], stderr=subprocess.DEVNULL).decode().strip()
-        if lib_file and os.path.isabs(lib_file) and Path(lib_file).exists():
-            return lib_file
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+    # 2. Query llvm-config or clang
+    libdir = _query(["llvm-config", "--libdir"])
+    if libdir:
+        for ext in (".so", ".so.1", ".dylib", ".dll"):
+            path = Path(libdir) / f"libclang{ext}"
+            if path.exists():
+                return str(path.absolute())
 
-    # 4. Fallback to hardcoded search paths
+    clang_lib = _query(["clang", "-print-file-name=libclang.so"], "libclang")
+    if clang_lib and Path(clang_lib).is_absolute() and Path(clang_lib).exists():
+        return clang_lib
+
+    # 3. Probabilistic search
     for candidate in _LIBCLANG_SEARCH_PATHS:
         if Path(candidate).exists():
             return str(Path(candidate).absolute())
-
     return None
+
+
+def _init_clang() -> Any:
+    """Initialize clang.cindex and return the module, or exit on failure."""
+    lib_path = find_libclang()
+    if not lib_path:
+        console.print("[bold red]ERROR:[/] Could not locate libclang. Set `CLANG_LIBRARY_PATH`.")
+        sys.exit(1)
+
+    try:
+        import clang.cindex as cindex  # type: ignore[import-not-found]
+        cindex.Config.set_library_file(lib_path)
+        return cindex
+    except (ImportError, cindex.LibclangError) as exc:
+        console.print(f"[bold red]ERROR:[/] Failed to load libclang – {exc}")
+        sys.exit(1)
 
 
 # Clang resource directories contain compiler built-in headers (stdint.h, etc.).
@@ -200,28 +205,11 @@ def _extract_lines(source_lines: list[str], start_line: int, end_line: int) -> s
     return "".join(source_lines[start_line - 1 : end_line])  # type: ignore[index]
 
 
-def _is_risky_cursor(cursor: "clang.cindex.Cursor") -> bool:  # type: ignore[name-defined] # noqa: F821
-    """
-    Determine whether an AST node represents a dangerous memory operation.
-
-    Flags explicit calls to known risky functions (``malloc``, ``free``, etc.),
-    raw pointer arithmetic via binary operators, and direct array subscript
-    expressions.
-
-    Args:
-        cursor: A libclang AST cursor to evaluate.
-
-    Returns:
-        ``True`` if the node should mark its enclosing function for LLM review.
-    """
-    import clang.cindex as cindex  # type: ignore[import-not-found]
-
-    kind = cursor.kind
-    if kind == cindex.CursorKind.CALL_EXPR and cursor.spelling in _RISKY_CALLS:
+def _is_risky_cursor(cursor: Any, cindex: Any) -> bool:
+    """Determine whether an AST node represents a dangerous memory operation."""
+    if cursor.kind == cindex.CursorKind.CALL_EXPR and cursor.spelling in _RISKY_CALLS:
         return True
-    if kind in (cindex.CursorKind.BINARY_OPERATOR, cindex.CursorKind.ARRAY_SUBSCRIPT_EXPR):
-        return True
-    return False
+    return cursor.kind in (cindex.CursorKind.BINARY_OPERATOR, cindex.CursorKind.ARRAY_SUBSCRIPT_EXPR)
 
 
 def _walk(cursor: "clang.cindex.Cursor") -> Iterator["clang.cindex.Cursor"]:  # type: ignore[name-defined] # noqa: F821
@@ -264,30 +252,12 @@ def slice_risky_functions(source_file: str) -> list[dict]:
         SystemExit: If libclang cannot be located, loaded, or if the file
                     cannot be parsed as valid C/C++.
     """
-    import clang.cindex as cindex  # type: ignore[import-not-found]
-
-    libclang_path = find_libclang()
-    if libclang_path is None:
-        console.print(
-            "[bold red]ERROR:[/] Could not locate libclang. "
-            "Set CLANG_LIBRARY_PATH or install the clang package."
-        )
-        sys.exit(1)
-
-    try:
-        cindex.Config.set_library_file(libclang_path)
-    except cindex.LibclangError as exc:
-        console.print(f"[bold red]ERROR:[/] Failed to load libclang – {exc}")
-        sys.exit(1)
-
+    cindex = _init_clang()
     index = cindex.Index.create()
     try:
         tu = index.parse(source_file, args=_build_clang_args())
     except cindex.TranslationUnitLoadError:
-        console.print(
-            f"[bold red]ERROR:[/] Failed to parse [italic]{source_file}[/]. "
-            "Ensure it is a valid C/C++ source file."
-        )
+        console.print(f"[bold red]ERROR:[/] Failed to parse [italic]{source_file}[/].")
         sys.exit(1)
 
     # Severity >= 3 means Error or Fatal. We still proceed — a missing system
@@ -321,7 +291,7 @@ def slice_risky_functions(source_file: str) -> list[dict]:
 
         risk_ops: set[str] = set()
         for child in _walk(top):
-            if not _is_risky_cursor(child):
+            if not _is_risky_cursor(child, cindex):
                 continue
             if child.kind == cindex.CursorKind.CALL_EXPR:
                 risk_ops.add(f"call:{child.spelling}")
@@ -436,39 +406,29 @@ class _ProviderFn(Protocol):
     def __call__(self, source_file: str, fn_slices: list[dict]) -> AuditReport: ...
 
 
+def _get_api_config(provider: str) -> tuple[str, str, str]:
+    """Helper to load and validate LLM provider config."""
+    key_name = "OPENAI_API_KEY" if provider == "openai" else "GEMINI_API_KEY"
+    key  = os.environ.get(key_name)
+    if not key:
+        console.print(f"[bold red]ERROR:[/] {key_name} is not set.")
+        sys.exit(1)
+
+    model_env = "OPENAI_MODEL" if provider == "openai" else "GEMINI_MODEL"
+    default_model = "gpt-4o" if provider == "openai" else "gemini-2.0-flash"
+    return key, os.environ.get(model_env, default_model), provider
+
+
 def _run_audit_openai(source_file: str, fn_slices: list[dict]) -> AuditReport:
-    """
-    Run the audit against the OpenAI API.
-
-    Uses ``client.beta.chat.completions.parse()`` with ``response_format=AuditReport``
-    to guarantee native Pydantic structured output — no regex post-processing needed.
-
-    Args:
-        source_file: Path to the source file being audited (included in the prompt).
-        fn_slices:   Filtered function descriptors from ``slice_risky_functions``.
-
-    Returns:
-        A validated ``AuditReport`` instance.
-
-    Raises:
-        SystemExit: On import failure, missing API key, or a failed API call.
-    """
+    """Run the audit against OpenAI using native completion parsing."""
     try:
-        from openai import OpenAI  # type: ignore[import-not-found]
+        from openai import OpenAI
     except ImportError:
         console.print("[bold red]ERROR:[/] `openai` package is not installed.")
         sys.exit(1)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        console.print(
-            "[bold red]ERROR:[/] OPENAI_API_KEY is not set. "
-            "Copy .env.example to .env and fill in your key."
-        )
-        sys.exit(1)
-
-    model  = os.environ.get("OPENAI_MODEL", "gpt-4o")
-    client = OpenAI(api_key=api_key)
+    key, model, _ = _get_api_config("openai")
+    client = OpenAI(api_key=key)
 
     try:
         response = client.beta.chat.completions.parse(
@@ -479,60 +439,29 @@ def _run_audit_openai(source_file: str, fn_slices: list[dict]) -> AuditReport:
             ],
             response_format=AuditReport,
             temperature=0.1,
-            max_tokens=4096,
         )
+        report = response.choices[0].message.parsed
+        if not report:
+            console.print(f"[bold red]ERROR:[/] Model refusal: {response.choices[0].message.refusal}")
+            sys.exit(1)
+        return report
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[bold red]ERROR:[/] OpenAI request failed – {exc}")
+        console.print(f"[bold red]ERROR:[/] OpenAI request failed: {exc}")
         sys.exit(1)
-
-    report = response.choices[0].message.parsed
-    if report is None:
-        console.print(f"[bold red]ERROR:[/] Model refused – {response.choices[0].message.refusal}")
-        sys.exit(1)
-
-    return report
 
 
 def _run_audit_gemini(source_file: str, fn_slices: list[dict]) -> AuditReport:
-    """
-    Run the audit against the Google Gemini API.
-
-    Requires the new ``google-genai`` unified SDK — **not** the deprecated
-    ``google-generativeai`` package, which does not support Gemini 2.0+
-    structured JSON output via ``response_schema``.
-
-    Args:
-        source_file: Path to the source file being audited (included in the prompt).
-        fn_slices:   Filtered function descriptors from ``slice_risky_functions``.
-
-    Returns:
-        A validated ``AuditReport`` instance deserialized from the JSON response.
-
-    Raises:
-        SystemExit: On import failure, missing API key, API error, or a
-                    malformed response that fails Pydantic validation.
-    """
+    """Run the audit against Google Gemini using the unified SDK."""
     try:
-        from google import genai                      # type: ignore[import-not-found]
-        from google.genai import types as genai_types # type: ignore[import-not-found]
+        from google import genai
+        from google.genai import types
     except ImportError:
-        console.print(
-            "[bold red]ERROR:[/] `google-genai` package is not installed. "
-            "Run: pip install google-genai"
-        )
+        console.print("[bold red]ERROR:[/] 'google-genai' is missing. Run 'pip install google-genai'.")
         sys.exit(1)
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        console.print(
-            "[bold red]ERROR:[/] GEMINI_API_KEY is not set. "
-            "Copy .env.example to .env and fill in your key."
-        )
-        sys.exit(1)
-
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-    client     = genai.Client(api_key=api_key)
-    config     = genai_types.GenerateContentConfig(
+    key, model, _ = _get_api_config("gemini")
+    client = genai.Client(api_key=key)
+    config = types.GenerateContentConfig(
         temperature=0.1,
         response_mime_type="application/json",
         response_schema=AuditReport,
@@ -541,22 +470,14 @@ def _run_audit_gemini(source_file: str, fn_slices: list[dict]) -> AuditReport:
 
     try:
         response = client.models.generate_content(
-            model=model_name,
+            model=model,
             contents=_build_user_message(source_file, fn_slices),
             config=config,
         )
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[bold red]ERROR:[/] Gemini request failed – {exc}")
-        sys.exit(1)
-
-    # Gemini returns raw JSON in response.text; validate it through Pydantic.
-    try:
         return AuditReport(**json.loads(response.text))
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[bold red]ERROR:[/] Failed to parse Gemini response – {exc}")
-        console.print(f"[dim]Raw: {response.text[:500]}[/]")
+        console.print(f"[bold red]ERROR:[/] Gemini request failed: {exc}")
         sys.exit(1)
-
 
 # Provider registry — add new backends here by mapping a key to a _ProviderFn.
 # The key must match what the user sets in LLM_PROVIDER inside .env.
