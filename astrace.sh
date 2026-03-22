@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
 # ─── ASTrace AI – Runner Script ─────────────────────────────────────────────────
 # Usage:  ./audit.sh <path/to/file.c>
-#
-# Behaviour:
-#   1. Validates the target file exists.
-#   2. Resolves its absolute directory and filename.
-#   3. Ensures .env is present (copies from .env.example on first run).
-#   4. Builds (or reuses cached) Docker image.
-#   5. Executes the audit by mounting the source dir read-only into the container.
-#
+# Orchestrates Docker/local execution and dependency provisioning.
 # Requirements: bash >=4.0, docker (with Compose v2), realpath (coreutils)
 # ShellCheck: https://www.shellcheck.net/  (target: SC2034, SC2086, SC2155, …)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -19,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly CONTAINER_SRC_DIR="/app/external_src"
 
-# ── Colour codes (disabled automatically when stdout is not a TTY) ─────────────
+# ── Colour codes ───────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
   CLR_CYAN='\033[0;36m'
   CLR_BOLD='\033[1m'
@@ -89,7 +82,7 @@ if [[ ! -f "$ABSOLUTE_PATH" ]]; then
   exit 1
 fi
 
-# Reject directories passed as the argument
+# Reject directories
 if [[ -d "$ABSOLUTE_PATH" ]]; then
   log_error "Expected a file, got a directory: ${ABSOLUTE_PATH}"
   exit 1
@@ -125,8 +118,7 @@ if [[ ! -f "${SCRIPT_DIR}/.env" ]]; then
   fi
 fi
 
-# Warn (don't fail) if the active provider's key still looks like the placeholder.
-# Read LLM_PROVIDER from .env (default: openai) so we check the right key.
+# Check active provider's key
 _ACTIVE_PROVIDER="$(grep -E '^LLM_PROVIDER=' "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' "' || echo openai)"
 case "${_ACTIVE_PROVIDER}" in
   openai)
@@ -183,9 +175,8 @@ else
   log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
   printf "\n"
 
-  # `exec` replaces the shell process with docker, propagating signals correctly
-  # and returning docker's exit code directly to the caller.
-  # COMPOSE_PROGRESS=quiet suppresses the "Container Creating/Created" logs.
+  # Exec to preserve signals and exit codes.
+  # COMPOSE_PROGRESS=quiet suppresses lifecycle logs.
   exec env COMPOSE_PROGRESS=quiet docker compose \
     --project-directory "$SCRIPT_DIR" \
     run --rm \

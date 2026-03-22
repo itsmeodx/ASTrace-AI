@@ -1,24 +1,22 @@
 # ─── ASTrace AI – Docker Compose ─────────────────────────────────────────────
-# `version` is intentionally omitted – it is deprecated in Compose Specification.
-# Volumes and the run command are NOT defined here; they are injected at
-# runtime by audit.sh so any host file can be mounted dynamically.
+# Volumes and run commands are injected dynamically by astrace.sh
 
 services:
   audit:
     build:
       context: .
       dockerfile: Dockerfile
-      # Enable BuildKit cache mounts (defined in Dockerfile with --mount=type=cache)
+      # Enable BuildKit cache mounts
       args:
         BUILDKIT_INLINE_CACHE: "1"
-    # .env is injected at runtime – secrets never touch the image.
+    # Secrets injected at runtime
     env_file:
       - path: .env
         required: true
-    # stdin_open + tty let Rich detect a real TTY and render 24-bit colour.
+    # Force TTY for Rich colour rendering
     stdin_open: true
     tty: true
-    # Read-only root filesystem hardens the container; /tmp stays writable.
+    # Harden container (read-only rootfs)
     read_only: true
     tmpfs:
       - /tmp
