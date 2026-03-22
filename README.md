@@ -1,184 +1,159 @@
-# ASTrace AI 🔍
+# ASTrace AI (Educational PoC)
 
-## AST-Aware C/C++ AI Security Auditor
+![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)
+![License GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)
+![Status Proof of Concept](https://img.shields.io/badge/status-Proof_of_Concept-orange)
 
-ASTrace AI uses `libclang` to parse your C/C++ source into an Abstract Syntax Tree, slices out only the functions containing high-risk operations, and sends them to an LLM that reasons through the exact execution path that causes each bug — returning a structured **Logic Trace** report directly in your terminal.
+**ASTrace AI** is an educational proof-of-concept (PoC) demonstrating how to build highly cost-efficient, low-hallucination AI coding tools.
+
+Instead of dumping vast amounts of source code into an expensive LLM context window, this project showcases a hybrid architecture: it uses a deterministic tool (`libclang`) to do the heavy lifting locally for free, cutting out 95% of the codebase, and only passing surgical, 30-line slices of high-risk memory logic to the LLM for deep analysis.
 
 ---
 
-## Why ASTrace AI?
+## The Problem: Token Bloat
 
-Classic static analysers (Clang-Tidy, cppcheck) operate on surface-level patterns. ASTrace AI operates on **program logic**:
+Most AI-assisted security tools use a brute-force approach: they blindly dump your entire C file into the LLM context window.
 
-| Capability                         | Pattern-Based Linters | ASTrace AI |
-| ---------------------------------- | --------------------- | ---------- |
-| Buffer overflow (constant index)   | ✅                    | ✅         |
-| Use-after-free across branches     | ❌                    | ✅         |
-| Double-free in error paths         | ❌                    | ✅         |
-| Memory leak on early return        | ❌                    | ✅         |
-| Integer overflow → heap corruption | ❌                    | ✅         |
+This causes three massive problems:
+1. **Skyrocketing API Costs**: You pay for every token of perfectly safe, irrelevant code.
+2. **Context Window Limits**: Large legacy codebases simply don't fit.
+3. **Hallucinations**: The model gets confused by thousands of lines of background noise, leading to false positives and generic advice.
 
-### How it works
+## The Solution: Hybrid AST Pre-filtering
+
+ASTrace AI demonstrates a smarter, heavily optimized pipeline
+
+1. **Free Local Parsing**: `libclang` parses the Abstract Syntax Tree (AST) locally.
+2. **Deterministic Slicing**: It extracts *only* the specific functions that physically contain risky memory operations (`malloc`, `free`, pointer arithmetic, array subscripts).
+3. **Surgical LLM Execution**: The LLM is forced to analyze only these isolated, highly volatile function slices.
+
+Because the LLM only operates on tiny, highly curated slices of logic, API costs drop to practically zero and hallucination rates fall dramatically.
+
+---
+
+## How it Works
 
 ```text
 Source file
     │
     ▼
 libclang AST Parser
-    │   Walk AST, find functions containing:
-    │   • malloc / calloc / realloc / free
-    │   • Pointer arithmetic (BINARY_OPERATOR)
-    │   • Array subscripts (ARRAY_SUBSCRIPT_EXPR)
+    │   Walk AST locally (Cost: $0.00)
+    │   Find functions containing `malloc` / `free` / pointer math
     ▼
-AST Slicer  ──→  Only ~10–30% of source sent to LLM (saves tokens)
-    │
+AST Slicer
+    │   Discard 95% of safe code
     ▼
-LLM Provider  (OpenAI GPT-4o or Google Gemini 2.0)
-    │   Returns: severity, vulnerability_type,
-    │            logic_trace[] (step-by-step path to the bug),
-    │            recommendation
+LLM Provider  (OpenAI GPT-4o / Gemini 2.0)
+    │   Analyze targeted 30-line slices
+    │   Generate step-by-step Logic Traces
     ▼
 Rich Terminal Dashboard
 ```
 
 ---
 
-## Quick Start (Docker — zero setup required)
+## Built With
 
-### 1. Clone and configure
+* **Language**: Python 3.11+
+* **AST Parsing**: `libclang` (C/C++ LLVM bindings)
+* **LLM Integrations**: `openai` and `google-genai` SDKs
+* **Terminal Dashboard**: `rich`
+* **Containerization**: Docker Compose
 
+---
+
+## Exploring the Code
+
+This project is built for educational review. If you're interested in how the AST slicing or Docker orchestration works, check out the core files:
+
+```text
+ASTrace-AI/
+├── astrace.py         # The core PoC: Traverses AST with libclang, slices code, queries LLM
+├── astrace.sh         # Bash runner demonstrating secure, read-only Docker orchestration
+├── Dockerfile         # Multi-stage image building the libclang bindings
+├── compose.yaml       # Docker Compose service defining the secure runtime
+├── requirements.txt   # Pinned Python dependencies
+└── tests/             # Sample vulnerable C files used to test the LLM's reasoning
+```
+
+---
+
+## Running the Demo
+
+If you want to run the proof-of-concept yourself to see the cost-optimized LLM traces in action:
+
+### 1. Configure Provider
 ```bash
 git clone https://github.com/itsmeodx/ASTrace-AI.git
 cd ASTrace-AI
 cp .env.example .env
-# Open .env and choose your provider + set the appropriate API key
+# Open .env and add your OpenAI or Gemini AI Studio key
 ```
 
-### 2. Audit a file
-
-By default, the script builds and runs via Docker:
+### 2. Run the Audit
+The core runner script demonstrates secure Docker containerization, mounting files as strictly read-only:
 ```bash
-chmod +x audit.sh
-./audit.sh path/to/your/file.c
+chmod +x astrace.sh
+./astrace.sh tests/test_leak.c
 ```
 
-If you prefer to run natively on your host machine without Docker:
+If you prefer to run it natively without Docker, the script will automatically provision a Python `.venv` for you:
 ```bash
-./audit.sh --local path/to/your/file.c
+./astrace.sh --local tests/test_leak.c
 ```
-*(Passing `--local` for the first time will automatically create a `.venv` and install all required dependencies for you!)*
 
-The script will:
-
-- Auto-build the Docker image on first run (cached on subsequent runs)
-- Mount only the target file's directory into the container (read-only)
-- Stream the Rich-formatted report to your terminal
-
-### Example output
-
+### Example Output
+*(Notice how the tool explicitly lists only the exact lines of execution that cause the bug, based only on the tiny slice it was given.)*
 ```text
-╭─ ASTrace AI — vulnerable.c ──────────────────────────────────────────────╮
+╭─ ASTrace AI — test_leak.c ──────────────────────────────────────────────╮
 │  Finding Summary                                                           │
 │  🔴 CRITICAL  1                                                            │
-│  🟠 HIGH      1                                                            │
 ╰─ 2 functions analysed ────────────────────────────────────────────────────╯
 
-┌─ #1  Use-After-Free  in  process_request() ──────────────────────────────┐
+┌─ #1  Memory Leak  in  parse_records() ──────────────────────────────┐
 │ 🔴 CRITICAL                                                                │
 │ ┌──────┬──────────────────────────────────────────────────────────────┐   │
 │ │ Step │ Logic Trace                                                   │   │
 │ ├──────┼──────────────────────────────────────────────────────────────┤   │
-│ │ 1    │ Buffer `buf` allocated with malloc(size) at line 12           │   │
-│ │ 2    │ Error branch at line 18 calls free(buf) and returns           │   │
-│ │ 3    │ Control continues in caller; buf is dereferenced at line 31   │   │
+│ │ 1    │ `records` array allocated with malloc() at line 28            │   │
+│ │ 2    │ Error condition triggered at line 34 (fopen fails)            │   │
+│ │ 3    │ Function returns at line 36 without freeing `records`         │   │
 │ └──────┴──────────────────────────────────────────────────────────────┘   │
-│ 💡 Recommendation: Set buf = NULL after free() and guard dereferences     │
+│ 💡 Recommendation: Add a `goto cleanup` label to ensure `free(records)` │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## LLM Providers
-
-Set `LLM_PROVIDER` in your `.env` to select your preferred provider.
-
-### OpenAI (default)
-
-```bash
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-# OPENAI_MODEL=gpt-4o   # optional, default: gpt-4o
-```
-
-### Google Gemini
-
-```bash
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=AIza...
-# GEMINI_MODEL=gemini-2.0-flash   # optional, default: gemini-2.0-flash
-```
-
-> Uses the new **`google-genai`** unified SDK (Gemini 2.0+). The legacy `google-generativeai` SDK reached EOL in November 2025.
+> **Note**: This is an educational codebase demonstrating AI-agent optimization concepts. It is not intended for auditing production environments or systems.
 
 ---
 
-## Local Development (without Docker)
+## Key Educational Takeaways
 
-You can run the engine directly using the `.venv` or by passing the `--local` flag to the runner script.
-
-1. Ensure you have `clang` and `libclang` installed natively on your OS.
-2. Set your API key in `.env` (copied from `.env.example`).
-3. Run the audit:
-   ```bash
-   ./audit.sh --local path/to/file.c
-   ```
-   *The script will seamlessly generate its own `.venv` and install dependencies on its very first run!*
-
-> **Tip:** If `libclang` is not found automatically, set `CLANG_LIBRARY_PATH` in your `.env` to the path of your `libclang.so` / `libclang.dylib`.
+If you are studying or forking this repository to build your own AI coding agents, look for these implemented patterns:
+- **Physical Context Constraint**: The LLM's focus isn't constrained by a weak `System Prompt` telling it to ignore safe code; it's constrained physically because the AST Slicer literally removes the safe code before the prompt is built. 
+- **Fail-Fast Local Pipelines**: Using expensive LLMs to "search" or "grep" code is an anti-pattern. Use deterministic, $0 cost tooling (`libclang`, `tree-sitter`) to find the exact target (the needle), and only invoke the LLM to reason about the logic (the thread).
+- **Secure Architecture by Default**: The Docker runner demonstrates how to execute untrusted code or heavily parameterized audits inside a hardened, read-only filesystem container.
 
 ---
 
-## Configuration
+## License
 
-All options are set via `.env` (copied from `.env.example`):
-
-| Variable             | Required  | Default            | Description                      |
-| -------------------- | --------- | ------------------ | -------------------------------- |
-| `LLM_PROVIDER`       | ❌        | `openai`           | Provider: `openai` or `gemini`   |
-| `OPENAI_API_KEY`     | if openai | —                  | OpenAI API key                   |
-| `OPENAI_MODEL`       | ❌        | `gpt-4o`           | OpenAI model                     |
-| `GEMINI_API_KEY`     | if gemini | —                  | Google AI Studio API key         |
-| `GEMINI_MODEL`       | ❌        | `gemini-2.0-flash` | Gemini model                     |
-| `CLANG_LIBRARY_PATH` | ❌        | auto-detect        | Path to `libclang.so` / `.dylib` |
+Distributed under the GNU GPL v3 License. See `LICENSE` for more information.
 
 ---
 
-## Project Structure
+<p align="center">
+  Built with ❤️ by <a href="https://github.com/itsmeodx"><b>itsmeodx</b></a> for the security community. <br/>
+  <b>ASTrace AI</b> • Optimized AI-Agent Architectures
+</p>
 
-```text
-ASTrace AI/
-├── astrace.py         # Core engine: AST slicer + LLM providers + Rich UI
-├── audit.sh           # Bash runner (Docker orchestration)
-├── Dockerfile         # Multi-stage image (builder + slim runtime)
-├── compose.yaml       # Docker Compose service definition
-├── requirements.txt   # Pinned Python dependencies
-├── .env.example       # API key template
-├── .dockerignore      # Prevents .env and secrets from entering build context
-└── README.md
-```
-
----
-
-## Security Notes
-
-- `.env` is **never copied into the Docker image**. It is injected at runtime via `compose.yaml`'s `env_file` directive.
-- The container runs as a **non-root user** (`appuser`).
-- The container has a **read-only root filesystem** (`read_only: true` in `compose.yaml`).
-- Source files are mounted **read-only** (`:ro` flag in `docker compose run`).
-
----
-
-## Requirements
-
-- Docker Engine ≥ 24 with Compose v2 (`docker compose`)
-- An API key for your chosen provider (OpenAI or Google AI Studio)
+<p align="center">
+  <a href="https://github.com/itsmeodx/ASTrace-AI/stargazers">
+    <img src="https://img.shields.io/github/stars/itsmeodx/ASTrace-AI?style=social" alt="GitHub stars">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/itsmeodx/ASTrace-AI/issues">
+    <img src="https://img.shields.io/github/issues/itsmeodx/ASTrace-AI" alt="GitHub issues">
+  </a>
+</p>
