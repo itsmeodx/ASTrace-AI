@@ -563,7 +563,7 @@ def run_audit(source_file: str, fn_slices: list[dict]) -> AuditReport:
     if provider not in _PROVIDERS:
         console.print(
             f"[bold red]ERROR:[/] Unknown LLM_PROVIDER '{provider}'. "
-            f"Supported: {', '.join(f'\"{p}\"' for p in _PROVIDERS)}"
+            f"Supported: {', '.join(repr(p) for p in _PROVIDERS)}"
         )
         sys.exit(1)
 
