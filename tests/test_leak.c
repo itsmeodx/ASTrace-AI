@@ -4,7 +4,7 @@
  * Bug: parse_records() allocates a records[] array on every call,
  * but on the early-return error paths (lines 38 and 45) it returns
  * without freeing the allocation.  Only the happy path frees it.
- * LogicAudit should identify all three return paths and flag the
+ * ASTrace AI should identify all three return paths and flag the
  * two that skip free().
  */
 #include <stdio.h>

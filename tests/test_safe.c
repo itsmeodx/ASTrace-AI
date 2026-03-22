@@ -7,7 +7,7 @@
  *   - Array accesses are bounds-checked before use.
  *   - No pointer arithmetic.
  *
- * LogicAudit should report 0 findings here. If it reports any,
+ * ASTrace AI should report 0 findings here. If it reports any,
  * that would indicate a false-positive issue to investigate.
  */
 #include <stdio.h>

@@ -24,9 +24,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM python:3.11-slim-bookworm AS runtime
 
-LABEL org.opencontainers.image.title="LogicAudit"
+LABEL org.opencontainers.image.title="ASTrace AI"
 LABEL org.opencontainers.image.description="AST-Aware C/C++ AI Security Auditor"
-LABEL org.opencontainers.image.source="https://github.com/yourorg/logicaudit"
+LABEL org.opencontainers.image.source="https://github.com/yourorg/astrace"
 
 # Only copy the runtime .so – no headers, no compiler toolchain.
 # libc6-dev   → system headers (stdio.h, stdlib.h …) so libclang can resolve
@@ -41,7 +41,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # ── libclang discovery path ────────────────────────────────────────────────────
-# Consumed by find_libclang() in logicaudit.py.
+# Consumed by find_libclang() in astrace.py.
 ENV CLANG_LIBRARY_PATH=/usr/lib/llvm-14/lib/libclang.so.1
 
 # ── Bring in Python deps from builder ─────────────────────────────────────────
@@ -56,6 +56,6 @@ USER appuser
 # ── Application code ───────────────────────────────────────────────────────────
 # .env is intentionally NOT copied here – it is injected at runtime via
 # compose.yaml's `env_file` directive so secrets never land in the image layer.
-COPY --chown=appuser:appuser logicaudit.py .
+COPY --chown=appuser:appuser astrace.py .
 
 # No CMD – injected dynamically by audit.sh via `docker compose run`.

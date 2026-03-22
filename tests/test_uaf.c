@@ -3,7 +3,7 @@
  *
  * Bug: process_data() frees `buf` in the error path at line 28,
  * then the caller dereferences it again at line 45.
- * LogicAudit should catch the execution path:
+ * ASTrace AI should catch the execution path:
  *   alloc → conditional free → return ptr → dereference freed ptr
  */
 #include <stdio.h>

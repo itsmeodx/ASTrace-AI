@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─── LogicAudit – Runner Script ───────────────────────────────────────────────
+# ─── ASTrace AI – Runner Script ─────────────────────────────────────────────────
 # Usage:  ./audit.sh <path/to/file.c>
 #
 # Behaviour:
@@ -31,7 +31,7 @@ else
 fi
 
 # ── Logging helpers ───────────────────────────────────────────────────────────
-log_info()  { printf "${CLR_CYAN}${CLR_BOLD}[logicaudit]${CLR_RESET}  %b\n" "$*"; }
+log_info()  { printf "${CLR_CYAN}${CLR_BOLD}[astrace-ai]${CLR_RESET}  %b\n" "$*"; }
 log_warn()  { printf "${CLR_YELLOW}${CLR_BOLD}[warn]${CLR_RESET}  %b\n" "$*" >&2; }
 log_error() { printf "${CLR_RED}${CLR_BOLD}[error]${CLR_RESET}  %b\n" "$*" >&2; }
 
@@ -157,11 +157,11 @@ if [[ $RUN_LOCAL -eq 1 ]]; then
   fi
 
   # Exec directly using the venv's Python binary
-  exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/logicaudit.py" "$ABSOLUTE_PATH"
+  exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "$ABSOLUTE_PATH"
 
 else
   # ── Build Docker image ────────────────────────────────────────────────────────
-  printf "${CLR_CYAN}${CLR_BOLD}[logicaudit]${CLR_RESET}  Ensuring Docker image is up-to-date..."
+  printf "${CLR_CYAN}${CLR_BOLD}[astrace-ai]${CLR_RESET}  Ensuring Docker image is up-to-date..."
 
   # Run build quietly in the background, redirecting logs
   DOCKER_BUILDKIT=1 docker compose \
@@ -191,5 +191,5 @@ else
     run --rm \
     --volume "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro" \
     audit \
-    python logicaudit.py "${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
+    python astrace.py "${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
 fi

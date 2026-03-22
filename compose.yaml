@@ -1,4 +1,4 @@
-# ─── LogicAudit – Docker Compose ─────────────────────────────────────────────
+# ─── ASTrace AI – Docker Compose ─────────────────────────────────────────────
 # `version` is intentionally omitted – it is deprecated in Compose Specification.
 # Volumes and the run command are NOT defined here; they are injected at
 # runtime by audit.sh so any host file can be mounted dynamically.

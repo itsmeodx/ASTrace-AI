@@ -4,7 +4,7 @@
  * Bug: cleanup() calls free(ctx->buffer) unconditionally, but
  * handle_error() also calls cleanup() after already calling free()
  * directly, resulting in the same pointer being freed twice.
- * LogicAudit should trace the two free() call sites.
+ * ASTrace AI should trace the two free() call sites.
  */
 #include <stdio.h>
 #include <stdlib.h>

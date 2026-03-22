@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LogicAudit – AST-Aware C/C++ Security Auditor
+# ─── ASTrace AI – AST-Aware C/C++ Security Auditor ─────────────────────────────
 ==============================================
 Slices a C/C++ source file down to only the functions that contain high-risk
 memory or pointer operations, then asks an LLM to perform a deep logic-trace
@@ -653,7 +653,7 @@ def render_report(report: AuditReport) -> None:
         report: The ``AuditReport`` returned by ``run_audit``.
     """
     console.print()
-    console.print(Rule(f"[bold cyan]LogicAudit[/] — [italic]{report.file_analysed}[/]", style="cyan"))
+    console.print(Rule(f"[bold cyan]ASTrace AI[/] — [italic]{report.file_analysed}[/]", style="cyan"))
 
     # Early exit with a clean result if the LLM found no issues.
     if not report.findings:
@@ -725,7 +725,7 @@ def main() -> None:
                     any downstream step fails (libclang, API call, etc.).
     """
     if len(sys.argv) < 2:
-        console.print("[bold red]Usage:[/]  logicaudit.py <path/to/file.c>")
+        console.print("[bold red]Usage:[/]  astrace.py <path/to/file.c>")
         sys.exit(1)
 
     # The only accepted argument is the path to the C/C++ source file.

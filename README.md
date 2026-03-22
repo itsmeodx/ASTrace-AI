@@ -1,16 +1,16 @@
-# LogicAudit 🔍
+# ASTrace AI 🔍
 
 ## AST-Aware C/C++ AI Security Auditor
 
-LogicAudit uses `libclang` to parse your C/C++ source into an Abstract Syntax Tree, slices out only the functions containing high-risk operations, and sends them to an LLM that reasons through the exact execution path that causes each bug — returning a structured **Logic Trace** report directly in your terminal.
+ASTrace AI uses `libclang` to parse your C/C++ source into an Abstract Syntax Tree, slices out only the functions containing high-risk operations, and sends them to an LLM that reasons through the exact execution path that causes each bug — returning a structured **Logic Trace** report directly in your terminal.
 
 ---
 
-## Why LogicAudit?
+## Why ASTrace AI?
 
-Classic static analysers (Clang-Tidy, cppcheck) operate on surface-level patterns. LogicAudit operates on **program logic**:
+Classic static analysers (Clang-Tidy, cppcheck) operate on surface-level patterns. ASTrace AI operates on **program logic**:
 
-| Capability                         | Pattern-Based Linters | LogicAudit |
+| Capability                         | Pattern-Based Linters | ASTrace AI |
 | ---------------------------------- | --------------------- | ---------- |
 | Buffer overflow (constant index)   | ✅                    | ✅         |
 | Use-after-free across branches     | ❌                    | ✅         |
@@ -48,8 +48,8 @@ Rich Terminal Dashboard
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/yourorg/logicaudit.git
-cd logicaudit
+git clone https://github.com/yourorg/astrace.git
+cd astrace
 cp .env.example .env
 # Open .env and choose your provider + set the appropriate API key
 ```
@@ -77,7 +77,7 @@ The script will:
 ### Example output
 
 ```text
-╭─ LogicAudit — vulnerable.c ──────────────────────────────────────────────╮
+╭─ ASTrace AI — vulnerable.c ──────────────────────────────────────────────╮
 │  Finding Summary                                                           │
 │  🔴 CRITICAL  1                                                            │
 │  🟠 HIGH      1                                                            │
@@ -156,8 +156,8 @@ All options are set via `.env` (copied from `.env.example`):
 ## Project Structure
 
 ```text
-LogicAudit/
-├── logicaudit.py      # Core engine: AST slicer + LLM providers + Rich UI
+ASTrace AI/
+├── astrace.py         # Core engine: AST slicer + LLM providers + Rich UI
 ├── audit.sh           # Bash runner (Docker orchestration)
 ├── Dockerfile         # Multi-stage image (builder + slim runtime)
 ├── compose.yaml       # Docker Compose service definition

@@ -1,4 +1,4 @@
-# ─── LogicAudit – Direct dependencies (pinned) ────────────────────────────────
+# ─── ASTrace AI – Direct dependencies (pinned) ─────────────────────────────
 # Pin exact versions for reproducible builds.
 # To upgrade: edit versions here, then rebuild with `docker compose build`.
 
