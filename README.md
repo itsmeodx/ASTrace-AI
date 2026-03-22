@@ -31,6 +31,12 @@ Because the LLM only operates on tiny, highly curated slices of logic, API costs
 
 ---
 
+## Demo
+
+![ASTrace AI Demo](demo.gif)
+
+---
+
 ## How it Works
 
 ```text
