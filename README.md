@@ -48,8 +48,8 @@ Rich Terminal Dashboard
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/yourorg/astrace.git
-cd astrace
+git clone https://github.com/itsmeodx/ASTrace-AI.git
+cd ASTrace-AI
 cp .env.example .env
 # Open .env and choose your provider + set the appropriate API key
 ```

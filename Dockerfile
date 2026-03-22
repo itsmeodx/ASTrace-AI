@@ -23,7 +23,7 @@ FROM python:3.11-slim-bookworm AS runtime
 
 LABEL org.opencontainers.image.title="ASTrace AI"
 LABEL org.opencontainers.image.description="AST-Aware C/C++ AI Security Auditor"
-LABEL org.opencontainers.image.source="https://github.com/yourorg/astrace"
+LABEL org.opencontainers.image.source="https://github.com/itsmeodx/ASTrace-AI"
 
 # System headers needed by libclang AST parser to successfully resolve standard functions
 RUN apt-get update && \
