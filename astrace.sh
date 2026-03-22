@@ -141,10 +141,14 @@ if [[ $RUN_LOCAL -eq 1 ]]; then
   exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "$@"
 else
   # ── Docker Execution ──────────────────────────────────────────────────────────
-  printf "${CLR_CYAN}${CLR_BOLD}[astrace-ai]${CLR_RESET}  Updating Docker image..."
-  DOCKER_BUILDKIT=1 docker compose -f "${SCRIPT_DIR}/docker-compose.yaml" build --quiet audit > /dev/null 2>&1 &
+  printf "${CLR_CYAN}${CLR_BOLD}[astrace-ai]${CLR_RESET}  Building Docker image..."
+  DOCKER_BUILDKIT=1 docker compose build --quiet audit > "${SCRIPT_DIR}/.docker-build.log" 2>&1 &
   spin $!
-  wait $! || { printf " ${CLR_RED}FAILED${CLR_RESET}\n"; exit 1; }
+  if ! wait $!; then
+    printf " ${CLR_RED}FAILED${CLR_RESET}\n"
+    log_error "Docker build failed. See ${SCRIPT_DIR}/.docker-build.log for details."
+    exit 1
+  fi
   printf " ${CLR_CYAN}DONE${CLR_RESET}\n"
 
   [[ -n "$SOURCE_FILE" ]] && log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}\n"
@@ -159,6 +163,6 @@ else
   VOL_ARG=()
   [[ -n "$SOURCE_DIR" ]] && VOL_ARG=("--volume" "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro")
 
-  exec env COMPOSE_PROGRESS=quiet docker compose -f "${SCRIPT_DIR}/docker-compose.yaml" \
+  exec env COMPOSE_PROGRESS=quiet docker compose \
     run --rm "${VOL_ARG[@]}" audit python astrace.py "${args[@]}"
 fi
