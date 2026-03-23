@@ -10,6 +10,27 @@ Instead of dumping vast amounts of source code into an expensive LLM context win
 
 ---
 
+## Table of Contents
+
+- [ASTrace AI (Educational PoC)](#astrace-ai-educational-poc)
+  - [Table of Contents](#table-of-contents)
+  - [The Problem: Token Bloat](#the-problem-token-bloat)
+  - [The Solution: Hybrid AST Pre-filtering](#the-solution-hybrid-ast-pre-filtering)
+  - [Demo](#demo)
+  - [How it Works](#how-it-works)
+  - [Built With](#built-with)
+  - [Exploring the Code](#exploring-the-code)
+  - [Getting Started](#getting-started)
+    - [1. Configure Provider](#1-configure-provider)
+    - [2. Run the Audit](#2-run-the-audit)
+  - [Usage \& Options](#usage--options)
+    - [Host Execution (No Docker)](#host-execution-no-docker)
+    - [Example Output](#example-output)
+  - [Key Educational Takeaways](#key-educational-takeaways)
+  - [License](#license)
+
+---
+
 ## The Problem: Token Bloat
 
 Most AI-assisted security tools use a brute-force approach: they blindly dump your entire C file into the LLM context window.
@@ -86,11 +107,11 @@ ASTrace-AI/
 
 ---
 
-## Running the Demo
-
-If you want to run the proof-of-concept yourself to see the cost-optimized LLM traces in action:
+## Getting Started
 
 ### 1. Configure Provider
+
+Clone the repository and set up your environment variables:
 
 ```bash
 git clone https://github.com/itsmeodx/ASTrace-AI.git
@@ -108,15 +129,34 @@ chmod +x astrace.sh
 ./astrace.sh tests/test_leak.c
 ```
 
-If you prefer to run it natively without Docker, the script will automatically provision a Python `.venv` for you:
+---
+
+## Usage & Options
+
+The `astrace.sh` runner supports several flags for host-based execution and environment diagnostics:
 
 ```bash
-./astrace.sh --local tests/test_leak.c
+Usage: astrace.sh [options] <path/to/file.c>
+```
+
+| Flag        | Shorthand | Description                                                        |
+| :---------- | :-------- | :----------------------------------------------------------------- |
+| `--local`   | `-l`      | Run directly on the host using a Python `.venv` (bypasses Docker). |
+| `--check`   | `-c`      | Run environment diagnostics (libclang, API keys, dependencies).    |
+| `--version` | `-v`      | Show the current version of ASTrace AI.                            |
+| `--`        |           | POSIX separator to protect following arguments from shell parsing. |
+
+### Host Execution (No Docker)
+
+If you prefer not to use Docker, the script automatically provisions a virtual environment for you:
+
+```bash
+./astrace.sh -l tests/test_leak.c
 ```
 
 ### Example Output
 
-_(Notice how the tool explicitly lists only the exact lines of execution that cause the bug, based only on the tiny slice it was given.)_
+Notice how the tool explicitly lists only the exact lines of execution that cause the bug, based only on the tiny slice it was given.
 
 ```text
 ╭─ ASTrace AI — test_leak.c ──────────────────────────────────────────────╮
@@ -153,7 +193,7 @@ If you are studying or forking this repository to build your own AI coding agent
 
 ## License
 
-Distributed under the GNU GPL v3 License. See `LICENSE` for more information.
+Distributed under the GNU GPL v3 License. See [LICENSE](LICENSE) for more information.
 
 ---
 
