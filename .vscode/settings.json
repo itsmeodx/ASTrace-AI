@@ -1,15 +1,15 @@
 {
-    // Using local virtual environment
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-    "python.analysis.pythonPath": "${workspaceFolder}/.venv/bin/python",
-    "python.analysis.extraPaths": [
-        "${workspaceFolder}/.venv/lib/python3.11/site-packages"
-    ],
+  // Using local virtual environment
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.analysis.pythonPath": "${workspaceFolder}/.venv/bin/python",
+  "python.analysis.extraPaths": [
+      "${workspaceFolder}/.venv/lib/python3.11/site-packages"
+  ],
 
-    // Basic type-checking and automated formatting.
-    "python.analysis.typeCheckingMode": "basic",
-    "editor.formatOnSave": true,
-    "[python]": {
-        "editor.defaultFormatter": "ms-python.python"
-    }
+  // Basic type-checking and automated formatting.
+  "python.analysis.typeCheckingMode": "basic",
+  "editor.formatOnSave": true,
+  "[python]": {
+      "editor.defaultFormatter": "charliermarsh.ruff"
+  }
 }
