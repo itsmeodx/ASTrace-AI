@@ -292,6 +292,7 @@ def slice_risky_functions(source_file: str) -> list[dict]:
     )
 
     type_defs: list[str] = []
+    seen_defs: set[str] = set()
     fn_slices: list[dict] = []
 
     # Walk only the TU's direct children so we never descend into #include'd headers.
@@ -302,8 +303,21 @@ def slice_risky_functions(source_file: str) -> list[dict]:
             continue
 
         if top.kind in context_kinds:
+            # For types, only extract if it's a definition (has children).
+            # This avoids cluttering the prompt with empty forward declarations.
+            if top.kind in (
+                cindex.CursorKind.STRUCT_DECL,
+                cindex.CursorKind.UNION_DECL,
+                cindex.CursorKind.ENUM_DECL,
+            ):
+                if not any(top.get_children()):
+                    continue
+
             start, end = top.extent.start.line, top.extent.end.line
-            type_defs.append(_extract_lines(source_lines, start, end))
+            text = _extract_lines(source_lines, start, end).strip()
+            if text and text not in seen_defs:
+                type_defs.append(text)
+                seen_defs.add(text)
             continue
 
         if top.kind not in func_kinds or not top.is_definition():
