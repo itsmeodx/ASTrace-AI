@@ -256,7 +256,11 @@ def slice_risky_functions(source_file: str) -> list[dict]:
     cindex = _init_clang()
     index = cindex.Index.create()
     try:
-        tu = index.parse(source_file, args=_build_clang_args())
+        tu = index.parse(
+            source_file,
+            args=_build_clang_args(),
+            options=cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
+        )
     except cindex.TranslationUnitLoadError:
         console.print(f"[bold red]ERROR:[/] Failed to parse [italic]{source_file}[/].")
         sys.exit(1)
@@ -279,11 +283,12 @@ def slice_risky_functions(source_file: str) -> list[dict]:
         cindex.CursorKind.DESTRUCTOR,
     )
     # Global definitions to extract for context.
-    type_kinds = (
+    context_kinds = (
         cindex.CursorKind.STRUCT_DECL,
         cindex.CursorKind.UNION_DECL,
         cindex.CursorKind.ENUM_DECL,
         cindex.CursorKind.TYPEDEF_DECL,
+        cindex.CursorKind.MACRO_DEFINITION,
     )
 
     type_defs: list[str] = []
@@ -296,7 +301,7 @@ def slice_risky_functions(source_file: str) -> list[dict]:
         if top.location.file is None or top.location.file.name != source_file:
             continue
 
-        if top.kind in type_kinds:
+        if top.kind in context_kinds:
             start, end = top.extent.start.line, top.extent.end.line
             type_defs.append(_extract_lines(source_lines, start, end))
             continue
@@ -391,12 +396,13 @@ IMPORTANT RULES
 • If the code is clean, return an empty `findings` list and say so in `overall_summary`.
 • Always set `file_analysed` to the filename you were given.
 
-CONTEXTUAL TYPE DEFINITIONS
-───────────────────────────
-If the user provides a "Global Type Definitions" section, use it to resolve
-member types, struct layouts, and buffer sizes. For example, if a struct member
-is defined as `char name[64]`, it is a fixed-size buffer inside the struct,
-NOT an uninitialized pointer.
+CONTEXTUAL GLOBAL CONTEXT
+─────────────────────────
+If the user provides a "Global Context" section, use it to resolve member types,
+struct layouts, buffer sizes, and macro constants (`#define`). For example,
+if a struct member is `char name[64]`, it is a fixed-size buffer. If a macro
+`MAX_ITEMS` is defined as `32`, then `count > MAX_ITEMS` guarantees that `count`
+is small and won't cause overflows in most arithmetic operations.
 """
 
 
@@ -419,12 +425,9 @@ def _build_user_message(
     """
     sections = []
 
-    # 1. Global Context (Types)
+    # 1. Global Context (Types & Macros)
     if type_defs:
-        sections.append(
-            "## Global Type Definitions\n"
-            + "\n\n".join(f"```c\n{td}```" for td in type_defs)
-        )
+        sections.append("## Global Context\n" + "\n\n".join(f"```c\n{td}```" for td in type_defs))
 
     # 2. Function Slices
     sections.append("## Function Snippets for Audit")
