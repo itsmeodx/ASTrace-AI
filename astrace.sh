@@ -44,47 +44,69 @@ spin() {
 
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
-  printf "Usage:  %s [--local] [options] <path/to/file.c>\n" "$(basename "$0")" >&2
-  printf "  --local : Run directly on the host using .venv (bypasses Docker)\n" >&2
-  printf "  --check : Run environment diagnostic check\n" >&2
-  printf "  --version : Show version information\n" >&2
+  printf "Usage:  %s [options] <path/to/file.c>\n" "$(basename "$0")" >&2
+  printf "  -l, --local   : Run directly on the host using .venv (bypasses Docker)\n" >&2
+  printf "  -c, --check   : Run environment diagnostic check\n" >&2
+  printf "  -v, --version : Show version information\n" >&2
   exit 1
 }
 
 # ── Pre-flight: argument count ────────────────────────────────────────────────
 [[ $# -ge 1 ]] || usage
 
+# ── Argument Parsing ──────────────────────────────────────────────────────────
 RUN_LOCAL=0
-# Detect if we should run locally (either --local is passed, or we are running a check/version)
-if [[ $* == *"--local"* ]] || [[ $* == *"--check"* ]] || [[ $* == *"--version"* ]]; then
-  RUN_LOCAL=1
-fi
+CLI_MODE="audit"  # Default mode
+PASSTHROUGH_ARGS=()
+SOURCE_FILE_INPUT=""
 
-# Strip --local from args so it doesn't confuse the python script (if it survives)
-# But actually, we can just pass them all through since astrace.sh handles its own.
-# To be clean, we'll only shift --local if it was the FIRST argument to maintain backward compatibility.
-if [[ "${1:-}" == "--local" ]]; then
-  shift
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -l|--local)
+      RUN_LOCAL=1
+      shift
+      ;;
+    -c|--check)
+      CLI_MODE="check"
+      RUN_LOCAL=1
+      PASSTHROUGH_ARGS+=("--check")
+      shift
+      ;;
+    -v|--version)
+      CLI_MODE="version"
+      RUN_LOCAL=1
+      PASSTHROUGH_ARGS+=("--version")
+      shift
+      ;;
+    --)
+      shift
+      PASSTHROUGH_ARGS+=("$@")
+      break
+      ;;
+    -*)
+      log_error "Unknown option: $1"
+      usage
+      ;;
+    *)
+      if [[ -z "$SOURCE_FILE_INPUT" ]]; then
+        SOURCE_FILE_INPUT="$1"
+      fi
+      PASSTHROUGH_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
 
-# POSIX standard end-of-options marker
-if [[ "${1:-}" == "--" ]]; then
-  shift
-fi
+# ── Pre-flight Checks ─────────────────────────────────────────────────────────
 
-# ── Pre-flight: resolve absolute path (only if a file is provided) ──
+# Resolve absolute path (only if not doing a check/version without a file)
 ABSOLUTE_PATH=""
 SOURCE_DIR=""
 SOURCE_FILE=""
 
-# If there's an argument left and it's not a known flag, treat it as a file.
-# We also SKIP this if --check or --version is present anywhere in the args.
-if [[ $* == *"--check"* ]] || [[ $* == *"--version"* ]]; then
-  : # Skip file check
-elif [[ $# -gt 0 ]] && [[ "$1" != --* ]]; then
-  TARGET_INPUT="$1"
-  if ! ABSOLUTE_PATH="$(realpath -- "$TARGET_INPUT" 2>/dev/null)"; then
-    log_error "Cannot resolve path: ${TARGET_INPUT}"
+if [[ -n "$SOURCE_FILE_INPUT" ]]; then
+  if ! ABSOLUTE_PATH="$(realpath -- "$SOURCE_FILE_INPUT" 2>/dev/null)"; then
+    log_error "Cannot resolve path: ${SOURCE_FILE_INPUT}"
     exit 1
   fi
 
@@ -131,14 +153,14 @@ if [[ ! -f "${SCRIPT_DIR}/.env" ]]; then
 fi
 
 if [[ $RUN_LOCAL -eq 1 ]]; then
-  [[ -n "$SOURCE_FILE" ]] && log_info "Auditing locally: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
+  [[ "$CLI_MODE" == "audit" && -n "$SOURCE_FILE" ]] && log_info "Auditing locally: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}"
 
   if [[ ! -f "${SCRIPT_DIR}/.venv/bin/python" ]]; then
     log_info "Creating .venv..."
     python3 -m venv "${SCRIPT_DIR}/.venv"
     "${SCRIPT_DIR}/.venv/bin/pip" install --quiet -r "${SCRIPT_DIR}/requirements.txt"
   fi
-  exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "$@"
+  exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "${PASSTHROUGH_ARGS[@]}"
 else
   # ── Docker Execution ──────────────────────────────────────────────────────────
   printf "${CLR_CYAN}${CLR_BOLD}[astrace-ai]${CLR_RESET}  Building Docker image..."
@@ -154,15 +176,15 @@ else
   [[ -n "$SOURCE_FILE" ]] && log_info "Auditing: ${CLR_BOLD}${SOURCE_FILE}${CLR_RESET}\n"
 
   # Translate host path to container path if needed
-  args=()
-  for arg in "$@"; do
-    [[ "$arg" == "$ABSOLUTE_PATH" || "$arg" == "$TARGET_INPUT" ]] && arg="${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
-    args+=("$arg")
+  FINAL_ARGS=()
+  for arg in "${PASSTHROUGH_ARGS[@]}"; do
+    [[ "$arg" == "$ABSOLUTE_PATH" || "$arg" == "$SOURCE_FILE_INPUT" ]] && arg="${CONTAINER_SRC_DIR}/${SOURCE_FILE}"
+    FINAL_ARGS+=("$arg")
   done
 
   VOL_ARG=()
   [[ -n "$SOURCE_DIR" ]] && VOL_ARG=("--volume" "${SOURCE_DIR}:${CONTAINER_SRC_DIR}:ro")
 
   exec env COMPOSE_PROGRESS=quiet docker compose \
-    run --rm "${VOL_ARG[@]}" audit python astrace.py "${args[@]}"
+    run --rm "${VOL_ARG[@]}" audit python astrace.py "${FINAL_ARGS[@]}"
 fi
