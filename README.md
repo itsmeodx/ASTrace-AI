@@ -15,6 +15,7 @@ Instead of dumping vast amounts of source code into an expensive LLM context win
 Most AI-assisted security tools use a brute-force approach: they blindly dump your entire C file into the LLM context window.
 
 This causes three massive problems:
+
 1. **Skyrocketing API Costs**: You pay for every token of perfectly safe, irrelevant code.
 2. **Context Window Limits**: Large legacy codebases simply don't fit.
 3. **Hallucinations**: The model gets confused by thousands of lines of background noise, leading to false positives and generic advice.
@@ -24,10 +25,10 @@ This causes three massive problems:
 ASTrace AI demonstrates a smarter, heavily optimized pipeline
 
 1. **Free Local Parsing**: `libclang` parses the Abstract Syntax Tree (AST) locally.
-2. **Deterministic Slicing**: It extracts *only* the specific functions that physically contain risky memory operations (`malloc`, `free`, pointer arithmetic, array subscripts).
+2. **Deterministic Slicing**: It extracts _only_ the specific functions that physically contain risky memory operations (`malloc`, `free`, pointer arithmetic, array subscripts).
 3. **Surgical LLM Execution**: The LLM is forced to analyze only these isolated, highly volatile function slices.
 
-Because the LLM only operates on tiny, highly curated slices of logic, API costs drop to practically zero and hallucination rates fall dramatically.
+Because the LLM only operates on tiny, highly curated slices of logic, API costs drop to **near-zero** (often less than $0.0001 per audit) and hallucination rates are **significantly reduced**, though manual verification remains essential.
 
 ---
 
@@ -61,11 +62,11 @@ Rich Terminal Dashboard
 
 ## Built With
 
-* **Language**: Python 3.11+
-* **AST Parsing**: `libclang` (C/C++ LLVM bindings)
-* **LLM Integrations**: `openai` and `google-genai` SDKs
-* **Terminal Dashboard**: `rich`
-* **Containerization**: Docker Compose
+- **Language**: Python 3.11+
+- **AST Parsing**: `libclang` (C/C++ LLVM bindings)
+- **LLM Integrations**: `openai` and `google-genai` SDKs
+- **Terminal Dashboard**: `rich`
+- **Containerization**: Docker Compose
 
 ---
 
@@ -90,6 +91,7 @@ ASTrace-AI/
 If you want to run the proof-of-concept yourself to see the cost-optimized LLM traces in action:
 
 ### 1. Configure Provider
+
 ```bash
 git clone https://github.com/itsmeodx/ASTrace-AI.git
 cd ASTrace-AI
@@ -98,19 +100,24 @@ cp .env.example .env
 ```
 
 ### 2. Run the Audit
+
 The core runner script demonstrates secure Docker containerization, mounting files as strictly read-only:
+
 ```bash
 chmod +x astrace.sh
 ./astrace.sh tests/test_leak.c
 ```
 
 If you prefer to run it natively without Docker, the script will automatically provision a Python `.venv` for you:
+
 ```bash
 ./astrace.sh --local tests/test_leak.c
 ```
 
 ### Example Output
-*(Notice how the tool explicitly lists only the exact lines of execution that cause the bug, based only on the tiny slice it was given.)*
+
+_(Notice how the tool explicitly lists only the exact lines of execution that cause the bug, based only on the tiny slice it was given.)_
+
 ```text
 ╭─ ASTrace AI — test_leak.c ──────────────────────────────────────────────╮
 │  Finding Summary                                                           │
@@ -137,7 +144,8 @@ If you prefer to run it natively without Docker, the script will automatically p
 ## Key Educational Takeaways
 
 If you are studying or forking this repository to build your own AI coding agents, look for these implemented patterns:
-- **Physical Context Constraint**: The LLM's focus isn't constrained by a weak `System Prompt` telling it to ignore safe code; it's constrained physically because the AST Slicer literally removes the safe code before the prompt is built. 
+
+- **Physical Context Constraint**: The LLM's focus isn't constrained by a weak `System Prompt` telling it to ignore safe code; it's constrained physically because the AST Slicer literally removes the safe code before the prompt is built.
 - **Fail-Fast Local Pipelines**: Using expensive LLMs to "search" or "grep" code is an anti-pattern. Use deterministic, $0 cost tooling (`libclang`, `tree-sitter`) to find the exact target (the needle), and only invoke the LLM to reason about the logic (the thread).
 - **Secure Architecture by Default**: The Docker runner demonstrates how to execute untrusted code or heavily parameterized audits inside a hardened, read-only filesystem container.
 
