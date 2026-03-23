@@ -78,7 +78,9 @@ def find_libclang() -> str | None:
 
     def _query(cmd: list[str], flag: str = "") -> str | None:
         try:
-            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+            out = (
+                subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+            )
             return out if out and (not flag or flag in out) else None
         except (subprocess.SubprocessError, FileNotFoundError):
             return None
@@ -106,11 +108,14 @@ def _init_clang() -> Any:
     """Initialize clang.cindex and return the module, or exit on failure."""
     lib_path = find_libclang()
     if not lib_path:
-        console.print("[bold red]ERROR:[/] Could not locate libclang. Set `CLANG_LIBRARY_PATH`.")
+        console.print(
+            "[bold red]ERROR:[/] Could not locate libclang. Set `CLANG_LIBRARY_PATH`."
+        )
         sys.exit(1)
 
     try:
         import clang.cindex as cindex  # type: ignore[import-not-found]
+
         cindex.Config.set_library_file(lib_path)
         return cindex
     except (ImportError, cindex.LibclangError) as exc:
@@ -209,7 +214,10 @@ def _is_risky_cursor(cursor: Any, cindex: Any) -> bool:
     """Determine whether an AST node represents a dangerous memory operation."""
     if cursor.kind == cindex.CursorKind.CALL_EXPR and cursor.spelling in _RISKY_CALLS:
         return True
-    return cursor.kind in (cindex.CursorKind.BINARY_OPERATOR, cindex.CursorKind.ARRAY_SUBSCRIPT_EXPR)
+    return cursor.kind in (
+        cindex.CursorKind.BINARY_OPERATOR,
+        cindex.CursorKind.ARRAY_SUBSCRIPT_EXPR,
+    )
 
 
 def _walk(cursor: "clang.cindex.Cursor") -> Iterator["clang.cindex.Cursor"]:  # type: ignore[name-defined] # noqa: F821
@@ -243,14 +251,7 @@ def slice_risky_functions(source_file: str) -> list[dict]:
         List of descriptor dicts, each with the following keys:
 
         - ``name``       — function spelling (e.g. ``"handle_error"``)
-        - ``start_line`` — 1-indexed first line of the function body
-        - ``end_line``   — 1-indexed last line of the function body
-        - ``source``     — raw source text for that range
-        - ``risk_ops``   — sorted list of flagged operations (e.g. ``"call:free"``)
-
-    Raises:
-        SystemExit: If libclang cannot be located, loaded, or if the file
-                    cannot be parsed as valid C/C++.
+        A tuple of (type_definitions: list[str], function_slices: list[dict]).
     """
     cindex = _init_clang()
     index = cindex.Index.create()
@@ -271,14 +272,22 @@ def slice_risky_functions(source_file: str) -> list[dict]:
     source_lines = _slurp(source_file)
 
     # All cursor kinds that represent a callable definition.
-    fn_kinds = (
+    func_kinds = (
         cindex.CursorKind.FUNCTION_DECL,
         cindex.CursorKind.CXX_METHOD,
         cindex.CursorKind.CONSTRUCTOR,
         cindex.CursorKind.DESTRUCTOR,
     )
+    # Global definitions to extract for context.
+    type_kinds = (
+        cindex.CursorKind.STRUCT_DECL,
+        cindex.CursorKind.UNION_DECL,
+        cindex.CursorKind.ENUM_DECL,
+        cindex.CursorKind.TYPEDEF_DECL,
+    )
 
-    result: list[dict] = []
+    type_defs: list[str] = []
+    fn_slices: list[dict] = []
 
     # Walk only the TU's direct children so we never descend into #include'd headers.
     # Using cursor.semantic_parent to walk upward is unreliable in plain C — it
@@ -286,7 +295,13 @@ def slice_risky_functions(source_file: str) -> list[dict]:
     for top in tu.cursor.get_children():
         if top.location.file is None or top.location.file.name != source_file:
             continue
-        if top.kind not in fn_kinds or not top.is_definition():
+
+        if top.kind in type_kinds:
+            start, end = top.extent.start.line, top.extent.end.line
+            type_defs.append(_extract_lines(source_lines, start, end))
+            continue
+
+        if top.kind not in func_kinds or not top.is_definition():
             continue
 
         risk_ops: set[str] = set()
@@ -304,15 +319,17 @@ def slice_risky_functions(source_file: str) -> list[dict]:
             continue
 
         start, end = top.extent.start.line, top.extent.end.line
-        result.append({
-            "name":       top.spelling,
-            "start_line": start,
-            "end_line":   end,
-            "source":     _extract_lines(source_lines, start, end),
-            "risk_ops":   sorted(risk_ops),
-        })
+        fn_slices.append(
+            {
+                "name": top.spelling,
+                "start_line": start,
+                "end_line": end,
+                "source": _extract_lines(source_lines, start, end),
+                "risk_ops": sorted(risk_ops),
+            }
+        )
 
-    return result
+    return type_defs, fn_slices
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -325,28 +342,28 @@ def slice_risky_functions(source_file: str) -> list[dict]:
 
 class Severity(str, Enum):
     CRITICAL = "Critical"
-    HIGH     = "High"
-    MEDIUM   = "Medium"
-    LOW      = "Low"
-    INFO     = "Info"
+    HIGH = "High"
+    MEDIUM = "Medium"
+    LOW = "Low"
+    INFO = "Info"
 
 
 class Finding(BaseModel):
     """A single confirmed vulnerability with a numbered execution-path trace."""
 
-    severity:           Severity
+    severity: Severity
     vulnerability_type: str
-    function_name:      str
+    function_name: str
     # Step-by-step chain of reasoning that shows exactly how the bug fires.
-    logic_trace:        list[str]
-    recommendation:     str
+    logic_trace: list[str]
+    recommendation: str
 
 
 class AuditReport(BaseModel):
     """Top-level envelope returned by the LLM for one source file."""
 
-    file_analysed:   str
-    findings:        list[Finding]
+    file_analysed: str
+    findings: list[Finding]
     overall_summary: str
 
 
@@ -373,10 +390,19 @@ IMPORTANT RULES
         "3. Write at buf[index] overwrites heap metadata at line 18").
 • If the code is clean, return an empty `findings` list and say so in `overall_summary`.
 • Always set `file_analysed` to the filename you were given.
+
+CONTEXTUAL TYPE DEFINITIONS
+───────────────────────────
+If the user provides a "Global Type Definitions" section, use it to resolve
+member types, struct layouts, and buffer sizes. For example, if a struct member
+is defined as `char name[64]`, it is a fixed-size buffer inside the struct,
+NOT an uninitialized pointer.
 """
 
 
-def _build_user_message(source_file: str, fn_slices: list[dict]) -> str:
+def _build_user_message(
+    source_file: str, type_defs: list[str], fn_slices: list[dict]
+) -> str:
     """
     Serialize the slicer output into a fenced-code markdown prompt.
 
@@ -385,31 +411,45 @@ def _build_user_message(source_file: str, fn_slices: list[dict]) -> str:
 
     Args:
         source_file: Original file path, shown to the LLM for context.
+        type_defs:   List of raw C/C++ type definition snippets.
         fn_slices:   List of function descriptor dicts from ``slice_risky_functions``.
 
     Returns:
         A single markdown string ready to use as the LLM user message.
     """
-    blocks = []
+    sections = []
+
+    # 1. Global Context (Types)
+    if type_defs:
+        sections.append(
+            "## Global Type Definitions\n"
+            + "\n\n".join(f"```c\n{td}```" for td in type_defs)
+        )
+
+    # 2. Function Slices
+    sections.append("## Function Snippets for Audit")
     for fn in fn_slices:
-        blocks.append(
+        sections.append(
             f"### Function `{fn['name']}` "
             f"(lines {fn['start_line']}–{fn['end_line']})\n"
             f"Risky ops detected: {', '.join(fn['risk_ops'])}\n\n"
             f"```c\n{fn['source']}```"
         )
-    return f"File: `{source_file}`\n\n" + "\n\n---\n\n".join(blocks)
+
+    return f"File: `{source_file}`\n\n" + "\n\n---\n\n".join(sections)
 
 
 # Any callable matching this signature can be registered as a provider.
 class _ProviderFn(Protocol):
-    def __call__(self, source_file: str, fn_slices: list[dict]) -> AuditReport: ...
+    def __call__(
+        self, source_file: str, type_defs: list[str], fn_slices: list[dict]
+    ) -> AuditReport: ...
 
 
 def _get_api_config(provider: str) -> tuple[str, str, str]:
     """Helper to load and validate LLM provider config."""
     key_name = "OPENAI_API_KEY" if provider == "openai" else "GEMINI_API_KEY"
-    key  = os.environ.get(key_name)
+    key = os.environ.get(key_name)
     if not key:
         console.print(f"[bold red]ERROR:[/] {key_name} is not set.")
         sys.exit(1)
@@ -419,7 +459,9 @@ def _get_api_config(provider: str) -> tuple[str, str, str]:
     return key, os.environ.get(model_env, default_model), provider
 
 
-def _run_audit_openai(source_file: str, fn_slices: list[dict]) -> AuditReport:
+def _run_audit_openai(
+    source_file: str, type_defs: list[str], fn_slices: list[dict]
+) -> AuditReport:
     """Run the audit against OpenAI using native completion parsing."""
     try:
         from openai import OpenAI
@@ -435,14 +477,19 @@ def _run_audit_openai(source_file: str, fn_slices: list[dict]) -> AuditReport:
             model=model,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user",   "content": _build_user_message(source_file, fn_slices)},
+                {
+                    "role": "user",
+                    "content": _build_user_message(source_file, type_defs, fn_slices),
+                },
             ],
             response_format=AuditReport,
             temperature=0.1,
         )
         report = response.choices[0].message.parsed
         if not report:
-            console.print(f"[bold red]ERROR:[/] Model refusal: {response.choices[0].message.refusal}")
+            console.print(
+                f"[bold red]ERROR:[/] Model refusal: {response.choices[0].message.refusal}"
+            )
             sys.exit(1)
         return report
     except Exception as exc:  # noqa: BLE001
@@ -450,13 +497,17 @@ def _run_audit_openai(source_file: str, fn_slices: list[dict]) -> AuditReport:
         sys.exit(1)
 
 
-def _run_audit_gemini(source_file: str, fn_slices: list[dict]) -> AuditReport:
+def _run_audit_gemini(
+    source_file: str, type_defs: list[str], fn_slices: list[dict]
+) -> AuditReport:
     """Run the audit against Google Gemini using the unified SDK."""
     try:
         from google import genai
         from google.genai import types
     except ImportError:
-        console.print("[bold red]ERROR:[/] 'google-genai' is missing. Run 'pip install google-genai'.")
+        console.print(
+            "[bold red]ERROR:[/] 'google-genai' is missing. Run 'pip install google-genai'."
+        )
         sys.exit(1)
 
     key, model, _ = _get_api_config("gemini")
@@ -471,13 +522,14 @@ def _run_audit_gemini(source_file: str, fn_slices: list[dict]) -> AuditReport:
     try:
         response = client.models.generate_content(
             model=model,
-            contents=_build_user_message(source_file, fn_slices),
+            contents=_build_user_message(source_file, type_defs, fn_slices),
             config=config,
         )
         return AuditReport(**json.loads(response.text))
     except Exception as exc:  # noqa: BLE001
         console.print(f"[bold red]ERROR:[/] Gemini request failed: {exc}")
         sys.exit(1)
+
 
 # Provider registry — add new backends here by mapping a key to a _ProviderFn.
 # The key must match what the user sets in LLM_PROVIDER inside .env.
@@ -487,7 +539,9 @@ _PROVIDERS: dict[str, _ProviderFn] = {
 }
 
 
-def run_audit(source_file: str, fn_slices: list[dict]) -> AuditReport:
+def run_audit(
+    source_file: str, type_defs: list[str], fn_slices: list[dict]
+) -> AuditReport:
     """
     Dispatch the analysis to the configured LLM backend.
 
@@ -496,6 +550,7 @@ def run_audit(source_file: str, fn_slices: list[dict]) -> AuditReport:
 
     Args:
         source_file: Path to the source file, forwarded to the provider.
+        type_defs:   Extracted type definitions (structs, typedefs, etc).
         fn_slices:   Filtered function descriptors from ``slice_risky_functions``.
 
     Returns:
@@ -513,7 +568,7 @@ def run_audit(source_file: str, fn_slices: list[dict]) -> AuditReport:
         )
         sys.exit(1)
 
-    return _PROVIDERS[provider](source_file, fn_slices)
+    return _PROVIDERS[provider](source_file, type_defs, fn_slices)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -524,10 +579,10 @@ def run_audit(source_file: str, fn_slices: list[dict]) -> AuditReport:
 # Centralised here so colors and icons are consistent across every panel.
 _SEVERITY_STYLES: dict[Severity, tuple[str, str]] = {
     Severity.CRITICAL: ("bold white on red", "🔴 CRITICAL"),
-    Severity.HIGH:     ("bold red",           "🟠 HIGH"),
-    Severity.MEDIUM:   ("bold yellow",         "🟡 MEDIUM"),
-    Severity.LOW:      ("bold blue",            "🔵 LOW"),
-    Severity.INFO:     ("bold dim",             "⚪ INFO"),
+    Severity.HIGH: ("bold red", "🟠 HIGH"),
+    Severity.MEDIUM: ("bold yellow", "🟡 MEDIUM"),
+    Severity.LOW: ("bold blue", "🔵 LOW"),
+    Severity.INFO: ("bold dim", "⚪ INFO"),
 }
 
 
@@ -583,7 +638,9 @@ def _build_finding_renderable(finding: Finding):  # noqa: ANN201
     rec_text.append("💡  Recommendation: ", style="bold green")
     rec_text.append(finding.recommendation, style="green")
 
-    return Group(_severity_text(finding.severity), Text(""), trace_table, Text(""), rec_text)
+    return Group(
+        _severity_text(finding.severity), Text(""), trace_table, Text(""), rec_text
+    )
 
 
 def render_report(report: AuditReport) -> None:
@@ -597,15 +654,22 @@ def render_report(report: AuditReport) -> None:
         report: The ``AuditReport`` returned by ``run_audit``.
     """
     console.print()
-    console.print(Rule(f"[bold cyan]ASTrace AI[/] — [italic]{report.file_analysed}[/]", style="cyan"))
+    console.print(
+        Rule(
+            f"[bold cyan]ASTrace AI[/] — [italic]{report.file_analysed}[/]",
+            style="cyan",
+        )
+    )
 
     # Early exit with a clean result if the LLM found no issues.
     if not report.findings:
-        console.print(Panel(
-            f"[bold green]✔  No findings.[/]\n\n{report.overall_summary}",
-            title="[bold green]Audit Result[/]",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                f"[bold green]✔  No findings.[/]\n\n{report.overall_summary}",
+                title="[bold green]Audit Result[/]",
+                border_style="green",
+            )
+        )
         return
 
     # ── Summary banner ──
@@ -624,15 +688,16 @@ def render_report(report: AuditReport) -> None:
 
     # The panel body now contains both the summary table and the LLM's text description.
     summary_group = Group(
-        summary_table,
-        Text("\n" + report.overall_summary, style="cyan")
+        summary_table, Text("\n" + report.overall_summary, style="cyan")
     )
 
-    console.print(Panel(
-        summary_group,
-        title="[bold]Finding Summary[/]",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel(
+            summary_group,
+            title="[bold]Finding Summary[/]",
+            border_style="cyan",
+        )
+    )
 
     # ── Individual finding panels ──
     for idx, finding in enumerate(report.findings, start=1):
@@ -644,16 +709,20 @@ def render_report(report: AuditReport) -> None:
         header.append(f"  in  {finding.function_name}()", style="italic dim")
 
         console.print()
-        console.print(Panel(
-            _build_finding_renderable(finding),
-            title=str(header),
-            # Pull the first word from the severity style (e.g. "bold red" → "bold") for border color.
-            border_style=_SEVERITY_STYLES[finding.severity][0].split(" ")[0],
-        ))
+        console.print(
+            Panel(
+                _build_finding_renderable(finding),
+                title=str(header),
+                # Pull the first word from the severity style (e.g. "bold red" → "bold") for border color.
+                border_style=_SEVERITY_STYLES[finding.severity][0].split(" ")[0],
+            )
+        )
 
     console.print()
     console.print(Rule(style="dim"))
-    console.print(f"[dim]Audit complete – {len(report.findings)} finding(s) reported.[/]\n")
+    console.print(
+        f"[dim]Audit complete – {len(report.findings)} finding(s) reported.[/]\n"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -672,10 +741,14 @@ def run_doctor() -> bool:
     with console.status("[dim]Checking libclang...[/]"):
         lib_path = find_libclang()
     if lib_path:
-        console.print(f"  [green]✔[/] [bold]libclang:[/] Found at [italic]{lib_path}[/]")
+        console.print(
+            f"  [green]✔[/] [bold]libclang:[/] Found at [italic]{lib_path}[/]"
+        )
     else:
         console.print("  [red]✘[/] [bold red]libclang:[/] Not found.")
-        console.print("      [dim]Action: Install `libllvm` or `clang` package, or set `CLANG_LIBRARY_PATH`. [/]")
+        console.print(
+            "      [dim]Action: Install `libllvm` or `clang` package, or set `CLANG_LIBRARY_PATH`. [/]"
+        )
         all_ok = False
 
     # 2. LLM Providers
@@ -684,9 +757,13 @@ def run_doctor() -> bool:
     api_key = os.environ.get(key_name)
 
     if api_key:
-        console.print(f"  [green]✔[/] [bold]LLM Provider:[/] {provider} (Key detected: {key_name})")
+        console.print(
+            f"  [green]✔[/] [bold]LLM Provider:[/] {provider} (Key detected: {key_name})"
+        )
     else:
-        console.print(f"  [yellow]⚠[/] [bold yellow]LLM Provider:[/] {provider} (Key missing: {key_name})")
+        console.print(
+            f"  [yellow]⚠[/] [bold yellow]LLM Provider:[/] {provider} (Key missing: {key_name})"
+        )
         console.print(f"      [dim]Action: Set `{key_name}` in your .env file.[/]")
         all_ok = False
 
@@ -707,9 +784,13 @@ def run_doctor() -> bool:
             missing.append(label)
 
     if not missing:
-        console.print(f"  [green]✔[/] [bold]Python Deps:[/] All {len(deps)} core packages installed.")
+        console.print(
+            f"  [green]✔[/] [bold]Python Deps:[/] All {len(deps)} core packages installed."
+        )
     else:
-        console.print(f"  [red]✘[/] [bold red]Python Deps:[/] Missing: {', '.join(missing)}")
+        console.print(
+            f"  [red]✘[/] [bold red]Python Deps:[/] Missing: {', '.join(missing)}"
+        )
         console.print("      [dim]Action: Run `pip install -r requirements.txt`[/]")
         all_ok = False
 
@@ -727,8 +808,12 @@ def main() -> None:
     Enhanced entry point for the ASTrace AI security auditor.
     """
     parser = ArgumentParser(description="ASTrace AI — AST-Aware C/C++ Security Auditor")
-    parser.add_argument("file", nargs="?", help="Path to the C/C++ source file to audit")
-    parser.add_argument("--check", action="store_true", help="Run environment diagnostic check")
+    parser.add_argument(
+        "file", nargs="?", help="Path to the C/C++ source file to audit"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="Run environment diagnostic check"
+    )
     parser.add_argument("--version", action="version", version="ASTrace AI v0.1.0-poc")
     args = parser.parse_args()
 
@@ -747,21 +832,31 @@ def main() -> None:
         sys.exit(1)
 
     # ── Stage 1: Parse & slice ──
-    with console.status("[bold cyan]Parsing AST and slicing risky functions…[/]", spinner="dots"):
-        fn_slices = slice_risky_functions(source_path)
+    with console.status(
+        "[bold cyan]Parsing AST and slicing risky functions…[/]", spinner="dots"
+    ):
+        type_defs, fn_slices = slice_risky_functions(source_path)
 
     # If the slicer finds nothing, the file has no memory-management code to audit.
     if not fn_slices:
-        console.print(Panel(
-            "[bold green]✔  No high-risk code patterns found.[/]\n"
-            "The file does not appear to contain memory management, "
-            "pointer arithmetic, or array subscript operations.",
-            title="[bold green]Audit Result[/]",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "[bold green]✔  No high-risk code patterns found.[/]\n"
+                "The file does not appear to contain memory management, "
+                "pointer arithmetic, or array subscript operations.",
+                title="[bold green]Audit Result[/]",
+                border_style="green",
+            )
+        )
         return
 
-    console.print(f"[cyan]AST slicer found [bold]{len(fn_slices)}[/] function(s) containing high-risk operations.[/]")
+    console.print(
+        f"[cyan]AST slicer found [bold]{len(fn_slices)}[/] function(s) containing high-risk operations.[/]"
+    )
+    if type_defs:
+        console.print(
+            f"  [dim]→[/] Extracted [bold]{len(type_defs)}[/] global type definition(s)."
+        )
     for fn in fn_slices:
         console.print(
             f"  [dim]→[/] [bold]{fn['name']}[/]()  "
@@ -769,8 +864,10 @@ def main() -> None:
         )
 
     # ── Stage 2: LLM analysis ──
-    with console.status("[bold cyan]Analysing with LLM (Logic Trace mode)…[/]", spinner="dots"):
-        report = run_audit(source_path, fn_slices)
+    with console.status(
+        "[bold cyan]Analysing with LLM (Logic Trace mode)…[/]", spinner="dots"
+    ):
+        report = run_audit(source_path, type_defs, fn_slices)
 
     # ── Stage 3: Render ──
     render_report(report)
