@@ -158,8 +158,8 @@ if [[ $RUN_LOCAL -eq 1 ]]; then
   if [[ ! -f "${SCRIPT_DIR}/.venv/bin/python" ]]; then
     log_info "Creating .venv..."
     python3 -m venv "${SCRIPT_DIR}/.venv"
-    "${SCRIPT_DIR}/.venv/bin/pip" install --quiet -r "${SCRIPT_DIR}/requirements.txt"
   fi
+  "${SCRIPT_DIR}/.venv/bin/pip" install --quiet -r "${SCRIPT_DIR}/requirements.txt"
   exec "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/astrace.py" "${PASSTHROUGH_ARGS[@]}"
 else
   # ── Docker Execution ──────────────────────────────────────────────────────────
