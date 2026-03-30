@@ -20,3 +20,6 @@ rich==13.7.1
 
 # python-dotenv – loads .env into os.environ at runtime
 python-dotenv==1.0.1
+
+# Token counting for context efficiency metrics
+tiktoken==0.12.0

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Iterator, Protocol
 
 # Third-party deps – type: ignore comments silence IDEs that aren't venv-aware.
+import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from rich import box
@@ -40,6 +41,9 @@ load_dotenv(Path(__file__).parent / ".env", override=True)
 
 # Shared Rich console instance used throughout the module.
 console = Console()
+
+# tiktoken encoding used to estimate tokens sent to the LLM.
+encoding = tiktoken.get_encoding("cl100k_base")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -874,11 +878,23 @@ def main() -> None:
         console.print(
             f"  [dim]→[/] Extracted [bold]{len(type_defs)}[/] global type definition(s)."
         )
+
+    # Tally sliced lines and estimate token cost while displaying the function list.
+    sliced_lines: int = 0
+    total_tokens_sent: int = 0
     for fn in fn_slices:
         console.print(
             f"  [dim]→[/] [bold]{fn['name']}[/]()  "
             f"[dim](lines {fn['start_line']}–{fn['end_line']}, ops: {', '.join(fn['risk_ops'])})[/]"
         )
+        sliced_lines += fn["end_line"] - fn["start_line"] + 1
+        total_tokens_sent += len(encoding.encode(fn["source"]))
+
+    # Calculate how much of the original file we *didn't* send to the LLM.
+    original_lines: int = len(_slurp(source_path))
+    reduction_pct: float = (
+        (1 - (sliced_lines / original_lines)) * 100 if original_lines else 0.0
+    )
 
     # ── Stage 2: LLM analysis ──
     with console.status(
@@ -888,6 +904,23 @@ def main() -> None:
 
     # ── Stage 3: Render ──
     render_report(report)
+
+    # ── Stage 4: Context efficiency metrics ──
+    metrics_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    metrics_table.add_column(style="bold cyan", no_wrap=True)
+    metrics_table.add_column(style="white")
+    metrics_table.add_row("Original lines", str(original_lines))
+    metrics_table.add_row("Sent to LLM (sliced lines)", str(sliced_lines))
+    metrics_table.add_row("Context reduction", f"{reduction_pct:.2f}%")
+    metrics_table.add_row("Estimated tokens sent", str(total_tokens_sent))
+
+    console.print(
+        Panel(
+            metrics_table,
+            title="[bold magenta]AST Slicing Efficiency[/]",
+            border_style="magenta",
+        )
+    )
 
 
 if __name__ == "__main__":
