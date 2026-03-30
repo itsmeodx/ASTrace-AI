@@ -494,7 +494,7 @@ def _run_audit_openai(
     client = OpenAI(api_key=key)
 
     try:
-        response = client.beta.chat.completions.parse(
+        response = client.chat.completions.parse(
             model=model,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
