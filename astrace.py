@@ -2,8 +2,8 @@
 """
 # ─── ASTrace AI – AST-Aware C/C++ Security Auditor ─────────────────────────────
 ==============================================
-Slices a C/C++ source file down to only the functions that contain high-risk
-memory or pointer operations, then asks an LLM to perform a deep logic-trace
+Slices a C/C++ source file down to functions that contain high-risk
+memory or pointer operations, then asks an LLM to perform a logic-trace
 analysis and return structured findings.
 
 Pipeline:
@@ -263,7 +263,7 @@ def slice_risky_functions(source_file: str) -> list[dict]:
         tu = index.parse(
             source_file,
             args=_build_clang_args(),
-            options=cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
+            options=cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
         )
     except cindex.TranslationUnitLoadError:
         console.print(f"[bold red]ERROR:[/] Failed to parse [italic]{source_file}[/].")
@@ -445,7 +445,9 @@ def _build_user_message(
 
     # 1. Global Context (Types & Macros)
     if type_defs:
-        sections.append("## Global Context\n" + "\n\n".join(f"```c\n{td}```" for td in type_defs))
+        sections.append(
+            "## Global Context\n" + "\n\n".join(f"```c\n{td}```" for td in type_defs)
+        )
 
     # 2. Function Slices
     sections.append("## Function Snippets for Audit")
