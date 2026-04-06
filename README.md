@@ -6,7 +6,7 @@
 
 **ASTrace AI** is an educational proof-of-concept (PoC) demonstrating how to build highly cost-efficient, low-hallucination AI coding tools.
 
-Instead of dumping vast amounts of source code into an expensive LLM context window, this project showcases a hybrid architecture: it uses a deterministic tool (`libclang`) to do the heavy lifting locally for free, cutting out 95% of the codebase, and only passing surgical, 30-line slices of high-risk memory logic to the LLM for deep analysis.
+Instead of dumping vast amounts of source code into an expensive LLM context window, this project showcases a hybrid architecture: it uses a deterministic tool (`libclang`) to do the heavy lifting locally for free, significantly reducing the volume of code processed by the LLM, and only passing targeted memory logic slices for deep analysis.
 
 ---
 
@@ -49,7 +49,7 @@ ASTrace AI demonstrates a smarter, heavily optimized pipeline
 2. **Deterministic Slicing**: It extracts _only_ the specific functions that physically contain risky memory operations (`malloc`, `free`, pointer arithmetic, array subscripts).
 3. **Surgical LLM Execution**: The LLM is forced to analyze only these isolated, highly volatile function slices.
 
-Because the LLM only operates on tiny, highly curated slices of logic, API costs drop to **near-zero** (often less than $0.0001 per audit) and hallucination rates are **significantly reduced**, though manual verification remains essential.
+Because the LLM only operates on small, highly curated slices of logic, API costs are **drastically lower** compared to whole-file approaches, and hallucination rates are **reduced**, though manual verification remains essential.
 
 ---
 
@@ -70,10 +70,10 @@ libclang AST Parser
     │   Find functions containing `malloc` / `free` / pointer math
     ▼
 AST Slicer
-    │   Discard 95% of safe code
+    │   Discard the majority of safe code
     ▼
 LLM Provider  (OpenAI GPT-4o / Gemini 2.0)
-    │   Analyze targeted 30-line slices
+    │   Analyze targeted function slices
     │   Generate step-by-step Logic Traces
     ▼
 Rich Terminal Dashboard
